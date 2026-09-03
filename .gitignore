@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment variables (secrets!)
+.env
+
+# Uploaded media files (user content, not code)
+uploads/*
+!uploads/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
