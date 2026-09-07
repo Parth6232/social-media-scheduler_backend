@@ -3,11 +3,12 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const authRoutes = require("./routes/authRoutes");
-const youtubeAuthRoutes = require("./routes/youtubeAuthRoutes"); 
+const youtubeAuthRoutes = require("./routes/youtubeAuthRoutes");
 const postRoutes = require("./routes/postRoutes");
 const { startScheduler } = require("./services/scheduler");
 const facebookAuthRoutes = require("./routes/facebookAuthRoutes");
 const accountRoutes = require("./routes/accountRoutes");
+const aiRoutes = require("./routes/aiRoutes");
 
 const app = express();
 
@@ -22,10 +23,11 @@ app.get("/", (req, res) => {
   });
 });
 app.use('/api/auth', authRoutes);
-app.use('/api/auth/youtube', youtubeAuthRoutes); 
+app.use('/api/auth/youtube', youtubeAuthRoutes);
 app.use('/api/posts', postRoutes);
 app.use('/api/auth/facebook', facebookAuthRoutes);
 app.use('/api/accounts', accountRoutes);
+app.use('/api/ai', aiRoutes);
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
