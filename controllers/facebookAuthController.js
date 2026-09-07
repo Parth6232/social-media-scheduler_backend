@@ -4,19 +4,45 @@ const ConnectedAccount = require("../models/ConnectedAccount");
 const APP_ID = process.env.FACEBOOK_APP_ID;
 const APP_SECRET = process.env.FACEBOOK_APP_SECRET;
 const REDIRECT_URI = process.env.FACEBOOK_REDIRECT_URI;
+const CONFIG_ID = process.env.FACEBOOK_CONFIG_ID;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+// Glossy styled HTML result page jo OAuth ke baad dikhta hai, OK button ke saath
+function renderResultPage(title, message, isSuccess = true) {
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <title>${title}</title>
+        <style>
+          body { font-family: 'Inter', sans-serif; background: #0A0F1E; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+          .card { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 40px; text-align: center; max-width: 420px; backdrop-filter: blur(10px); }
+          .icon { font-size: 48px; margin-bottom: 16px; }
+          h1 { font-size: 20px; margin-bottom: 8px; }
+          p { color: #9CA3AF; margin-bottom: 24px; }
+          button { background: linear-gradient(135deg, #7C3AED, #2563EB); color: white; border: none; padding: 12px 32px; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; }
+          button:hover { opacity: 0.9; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">${isSuccess ? "✅" : "⚠️"}</div>
+          <h1>${title}</h1>
+          <p>${message}</p>
+          <button onclick="window.location.href='${FRONTEND_URL}/accounts'">OK</button>
+        </div>
+      </body>
+    </html>
+  `;
+}
 
 exports.redirectToFacebook = (req, res) => {
   const { userId } = req.query;
 
-  const scopes = [
-    "pages_show_list",
-    "pages_read_engagement",
-    "pages_manage_posts",
-    "instagram_basic",
-    "instagram_content_publish",
-  ].join(",");
-
-  const url = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=${scopes}&state=${userId}`;
+  // Facebook Login for Business ab config_id use karta hai,
+  // scope permissions ab configuration ke andar hi predefined hain
+  const url = `https://www.facebook.com/v21.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&config_id=${CONFIG_ID}&state=${userId}`;
 
   res.redirect(url);
 };
@@ -49,7 +75,9 @@ exports.facebookCallback = async (req, res) => {
     const pages = pagesRes.data.data;
 
     if (!pages || pages.length === 0) {
-      return res.status(400).send("Koi Facebook Page nahi mili. Pehle ek Facebook Page banao.");
+      return res
+        .status(400)
+        .send(renderResultPage("Page Not Found", "Koi Facebook Page nahi mili. Pehle ek Facebook Page banao.", false));
     }
 
     const page = pages[0];
@@ -85,12 +113,13 @@ exports.facebookCallback = async (req, res) => {
         { upsert: true, new: true }
       );
 
-      return res.send("Facebook aur Instagram dono connect ho gaye! Ab yeh tab band kar sakte ho.");
+      return res.send(renderResultPage("Success!", "Facebook aur Instagram dono connect ho gaye.", true));
     }
 
-    res.send("Facebook connect ho gaya. Instagram Business account link nahi mila.");
+    res.send(renderResultPage("Partially Connected", "Facebook connect ho gaya. Instagram Business account link nahi mila.", true));
   } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).send("Error: " + (error.response?.data?.error?.message || error.message));
+    const fbError = error.response?.data?.error?.message || error.message;
+    console.error("Facebook OAuth error:", error.response?.data || error.message);
+    res.status(500).send(renderResultPage("Connection Failed", fbError, false));
   }
 };
