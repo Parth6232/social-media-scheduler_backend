@@ -1,6 +1,5 @@
 const axios = require("axios");
 const ConnectedAccount = require("../models/ConnectedAccount");
-const cloudinary = require("../config/cloudinary"); // <-- NAYA: ngrok ki jagah Cloudinary
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
 
@@ -20,20 +19,10 @@ async function publishToInstagram(userId, post) {
 
   const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(post.mediaUrl);
 
-  // NAYA: local file (post.mediaUrl) ko Cloudinary par upload karke permanent
-  // public HTTPS URL lo -- ab ngrok chalane ki ya PUBLIC_BASE_URL update karne
-  // ki zaroorat nahi hai, yeh URL kabhi nahi badalta.
-  let publicMediaUrl;
-  try {
-    const uploadResult = await cloudinary.uploader.upload(post.mediaUrl, {
-      resource_type: isVideo ? "video" : "image",
-      folder: "socialblitz_posts",
-    });
-    publicMediaUrl = uploadResult.secure_url;
-  } catch (uploadError) {
-    console.error("Cloudinary upload error:", uploadError.message);
-    throw new Error("Media ko Cloudinary par upload karne mein error aayi: " + uploadError.message);
-  }
+  // NAYA: post.mediaUrl ab pehle se hi Cloudinary ka permanent public URL hai
+  // (postController mein upload ho chuka hota hai), isliye yahan dobara upload
+  // karne ki zaroorat nahi -- seedha use kar sakte hain.
+  const publicMediaUrl = post.mediaUrl;
 
   try {
     // STEP 1: media container banao

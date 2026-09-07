@@ -2,6 +2,22 @@ const Post = require("../models/Post");
 const { publishToYouTube } = require("../services/youtubePublisher");
 const { publishToFacebook } = require("../services/facebookPublisher");
 const { publishToInstagram } = require("../services/instagramPublisher");
+const cloudinary = require("../config/cloudinary"); // <-- NAYA
+
+// NAYA: file ka buffer (memory storage se) seedha Cloudinary par upload karta hai.
+// Local disk ka use hi nahi hota, isliye Render/koi bhi free hosting pe safe hai.
+function uploadBufferToCloudinary(buffer, isVideo) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { resource_type: isVideo ? "video" : "image", folder: "socialblitz_posts" },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    stream.end(buffer);
+  });
+}
 
 async function publishPostNow(post) {
   post.status = "processing";
@@ -9,7 +25,7 @@ async function publishPostNow(post) {
 
   for (const target of post.targets) {
     try {
-       if (target.platform === "youtube") {
+      if (target.platform === "youtube") {
         const url = await publishToYouTube(post.userId, post);
         target.status = "published";
         target.publishedUrl = url;
@@ -17,7 +33,7 @@ async function publishPostNow(post) {
         const url = await publishToFacebook(post.userId, post);
         target.status = "published";
         target.publishedUrl = url;
-      }else if (target.platform === "instagram") {
+      } else if (target.platform === "instagram") {
         const url = await publishToInstagram(post.userId, post);
         target.status = "published";
         target.publishedUrl = url;
@@ -43,7 +59,15 @@ exports.createPost = async (req, res) => {
     console.log("BODY RECEIVED:", req.body);
     const { content, scheduledAt, platforms, privacy } = req.body;
     const userId = req.userId;
-    const mediaUrl = req.file ? req.file.path : null;
+
+    // NAYA: local path (req.file.path) ki jagah ab Cloudinary par upload karke
+    // uska secure_url hi mediaUrl banega.
+    let mediaUrl = null;
+    if (req.file) {
+      const isVideo = req.file.mimetype.startsWith("video/");
+      const uploadResult = await uploadBufferToCloudinary(req.file.buffer, isVideo);
+      mediaUrl = uploadResult.secure_url;
+    }
 
     if (!content || !platforms) {
       return res.status(400).json({ message: "content aur platforms zaroori hain" });

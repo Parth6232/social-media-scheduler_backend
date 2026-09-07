@@ -1,10 +1,17 @@
 const axios = require("axios");
-const fs = require("fs");
 const FormData = require("form-data");
 const ConnectedAccount = require("../models/ConnectedAccount");
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
 const GRAPH_VIDEO_URL = "https://graph-video.facebook.com/v21.0";
+
+// NAYA: post.mediaUrl ab local file path nahi, Cloudinary ka remote https URL
+// hota hai. Isliye fs.createReadStream() ki jagah is URL ko fetch karke uska
+// stream Facebook ko forward karte hain.
+async function getRemoteStream(url) {
+  const response = await axios.get(url, { responseType: "stream" });
+  return response.data;
+}
 
 async function publishToFacebook(userId, post) {
   const account = await ConnectedAccount.findOne({ userId, platform: "facebook" });
@@ -35,7 +42,7 @@ async function publishToFacebook(userId, post) {
       const form = new FormData();
       form.append("description", post.content);
       form.append("access_token", accessToken);
-      form.append("source", fs.createReadStream(post.mediaUrl));
+      form.append("source", await getRemoteStream(post.mediaUrl));
 
       const response = await axios.post(`${GRAPH_VIDEO_URL}/${pageId}/videos`, form, {
         headers: form.getHeaders(),
@@ -50,7 +57,7 @@ async function publishToFacebook(userId, post) {
     const form = new FormData();
     form.append("caption", post.content);
     form.append("access_token", accessToken);
-    form.append("source", fs.createReadStream(post.mediaUrl));
+    form.append("source", await getRemoteStream(post.mediaUrl));
 
     const response = await axios.post(`${GRAPH_URL}/${pageId}/photos`, form, {
       headers: form.getHeaders(),

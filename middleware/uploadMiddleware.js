@@ -1,16 +1,14 @@
 const multer = require("multer");
-const path = require("path");
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/"); // yahi folder mein file save hogi
-  },
-  filename: function (req, file, cb) {
-    const uniqueName = Date.now() + "-" + file.originalname;
-    cb(null, uniqueName);
-  },
+// NAYA: memoryStorage — file disk pe save NAHI hoti, seedha RAM mein buffer
+// ke roop mein aati hai (req.file.buffer). Yehi buffer postController.js
+// Cloudinary ko bhejta hai. Isse Render ke ephemeral disk ka issue khatam
+// ho jata hai kyuki file kabhi disk ko touch hi nahi karti.
+const storage = multer.memoryStorage();
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB tak allow (video ke liye zaroori)
 });
-
-const upload = multer({ storage });
 
 module.exports = upload;

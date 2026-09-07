@@ -1,6 +1,6 @@
 const { google } = require("googleapis");
+const axios = require("axios");
 const ConnectedAccount = require("../models/ConnectedAccount");
-const fs = require("fs");
 
 async function publishToYouTube(userId, post) {
   const account = await ConnectedAccount.findOne({ userId, platform: "youtube" });
@@ -34,7 +34,11 @@ async function publishToYouTube(userId, post) {
 
   const youtube = google.youtube({ version: "v3", auth: oauth2Client });
 
-const response = await youtube.videos.insert({
+  // NAYA: post.mediaUrl ab Cloudinary ka remote https URL hota hai (local
+  // file nahi), isliye usse fetch karke stream ke roop mein YouTube ko dete hain.
+  const mediaStream = (await axios.get(post.mediaUrl, { responseType: "stream" })).data;
+
+  const response = await youtube.videos.insert({
     part: "snippet,status",
     requestBody: {
       snippet: {
@@ -46,7 +50,7 @@ const response = await youtube.videos.insert({
       },
     },
     media: {
-      body: fs.createReadStream(post.mediaUrl),
+      body: mediaStream,
     },
   });
 
