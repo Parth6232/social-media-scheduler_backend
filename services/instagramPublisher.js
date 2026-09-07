@@ -1,11 +1,8 @@
 const axios = require("axios");
-const path = require("path");
 const ConnectedAccount = require("../models/ConnectedAccount");
+const cloudinary = require("../config/cloudinary"); // <-- NAYA: ngrok ki jagah Cloudinary
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
-
-// yaha apna ngrok URL daalo (jab bhi ngrok restart ho, ye badal jayega, tab yaha update karna)
-const PUBLIC_BASE_URL = "https://scone-jokester-cost.ngrok-free.dev";
 
 async function publishToInstagram(userId, post) {
   const account = await ConnectedAccount.findOne({ userId, platform: "instagram" });
@@ -21,11 +18,22 @@ async function publishToInstagram(userId, post) {
   const igAccountId = account.platformAccountId;
   const accessToken = account.accessToken;
 
-  // local file path (jaise "uploads\\filename.png") ko public URL mein badlo
-  const fileName = path.basename(post.mediaUrl);
-  const publicMediaUrl = `${PUBLIC_BASE_URL}/uploads/${encodeURIComponent(fileName)}`;
-
   const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(post.mediaUrl);
+
+  // NAYA: local file (post.mediaUrl) ko Cloudinary par upload karke permanent
+  // public HTTPS URL lo -- ab ngrok chalane ki ya PUBLIC_BASE_URL update karne
+  // ki zaroorat nahi hai, yeh URL kabhi nahi badalta.
+  let publicMediaUrl;
+  try {
+    const uploadResult = await cloudinary.uploader.upload(post.mediaUrl, {
+      resource_type: isVideo ? "video" : "image",
+      folder: "socialblitz_posts",
+    });
+    publicMediaUrl = uploadResult.secure_url;
+  } catch (uploadError) {
+    console.error("Cloudinary upload error:", uploadError.message);
+    throw new Error("Media ko Cloudinary par upload karne mein error aayi: " + uploadError.message);
+  }
 
   try {
     // STEP 1: media container banao
