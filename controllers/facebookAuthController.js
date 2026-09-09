@@ -80,43 +80,61 @@ exports.facebookCallback = async (req, res) => {
         .send(renderResultPage("Page Not Found", "Koi Facebook Page nahi mili. Pehle ek Facebook Page banao.", false));
     }
 
-    const page = pages[0];
+    // NAYA: pehle sirf pages[0] (pehla page) save hota tha. Ab jitne bhi
+    // pages user ke account se linked hain, sab ko loop karke alag-alag
+    // ConnectedAccount documents ke roop mein save karte hain. Isi tarah
+    // har page ka apna Instagram Business account (agar hai) bhi check
+    // aur save hota hai.
+    let savedFacebookCount = 0;
+    let savedInstagramCount = 0;
 
-    await ConnectedAccount.findOneAndUpdate(
-      { userId, platform: "facebook" },
-      {
-        userId,
-        platform: "facebook",
-        platformAccountId: page.id,
-        displayName: page.name,
-        accessToken: page.access_token,
-      },
-      { upsert: true, new: true }
-    );
-
-    const igRes = await axios.get(`https://graph.facebook.com/v21.0/${page.id}`, {
-      params: { fields: "instagram_business_account", access_token: page.access_token },
-    });
-
-    if (igRes.data.instagram_business_account) {
-      const igAccountId = igRes.data.instagram_business_account.id;
-
+    for (const page of pages) {
       await ConnectedAccount.findOneAndUpdate(
-        { userId, platform: "instagram" },
+        { userId, platform: "facebook", platformAccountId: page.id },
         {
           userId,
-          platform: "instagram",
-          platformAccountId: igAccountId,
-          displayName: page.name + " (Instagram)",
+          platform: "facebook",
+          platformAccountId: page.id,
+          displayName: page.name,
           accessToken: page.access_token,
         },
         { upsert: true, new: true }
       );
+      savedFacebookCount++;
 
-      return res.send(renderResultPage("Success!", "Facebook aur Instagram dono connect ho gaye.", true));
+      try {
+        const igRes = await axios.get(`https://graph.facebook.com/v21.0/${page.id}`, {
+          params: { fields: "instagram_business_account", access_token: page.access_token },
+        });
+
+        if (igRes.data.instagram_business_account) {
+          const igAccountId = igRes.data.instagram_business_account.id;
+
+          await ConnectedAccount.findOneAndUpdate(
+            { userId, platform: "instagram", platformAccountId: igAccountId },
+            {
+              userId,
+              platform: "instagram",
+              platformAccountId: igAccountId,
+              displayName: page.name + " (Instagram)",
+              accessToken: page.access_token,
+            },
+            { upsert: true, new: true }
+          );
+          savedInstagramCount++;
+        }
+      } catch (igErr) {
+        // Ek page ka IG check fail ho bhi jaye, baaki pages process hote rahenge
+        console.error(`Instagram check failed for page ${page.id}:`, igErr.response?.data || igErr.message);
+      }
     }
 
-    res.send(renderResultPage("Partially Connected", "Facebook connect ho gaya. Instagram Business account link nahi mila.", true));
+    const parts = [`${savedFacebookCount} Facebook page${savedFacebookCount > 1 ? "s" : ""} connected`];
+    if (savedInstagramCount > 0) {
+      parts.push(`${savedInstagramCount} Instagram account${savedInstagramCount > 1 ? "s" : ""} connected`);
+    }
+
+    return res.send(renderResultPage("Success!", parts.join(" aur ") + ".", true));
   } catch (error) {
     const fbError = error.response?.data?.error?.message || error.message;
     console.error("Facebook OAuth error:", error.response?.data || error.message);

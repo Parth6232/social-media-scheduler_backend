@@ -13,14 +13,23 @@ async function getRemoteStream(url) {
   return response.data;
 }
 
-async function publishToFacebook(userId, post) {
-  const account = await ConnectedAccount.findOne({ userId, platform: "facebook" });
+async function publishToFacebook(userId, post, pageId) {
+  // NAYA: agar pageId diya gaya hai (user ne dropdown se specific page choose
+  // kiya), toh usi page ka account dhundo. Agar nahi diya (backward-compat,
+  // ya sirf 1 page connected hai), toh purane behaviour jaisa pehla match lo.
+  const filter = { userId, platform: "facebook" };
+  if (pageId) filter.platformAccountId = pageId;
+
+  const account = await ConnectedAccount.findOne(filter);
 
   if (!account) {
     throw new Error("Facebook account connected nahi hai");
   }
 
-  const pageId = account.platformAccountId;
+  // account.platformAccountId hi actual page ID hai jispar post jayega —
+  // pageId param se match hi kiya gaya (upar filter mein), isliye use
+  // account se hi le rahe hain taaki single-source-of-truth rahe.
+  pageId = account.platformAccountId;
   const accessToken = account.accessToken;
 
   try {

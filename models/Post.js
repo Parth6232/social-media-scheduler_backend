@@ -12,7 +12,7 @@ const postSchema = new mongoose.Schema(
       required: true,
     },
     mediaUrl: {
-      type: String, // image/video ka link (abhi ke liye simple URL, baad mein file upload add karenge)
+      type: String, // image/video ka link (Cloudinary URL)
     },
     scheduledAt: {
       type: Date,
@@ -22,12 +22,12 @@ const postSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "processing", "completed", "failed"],
       default: "pending",
-    },    
-      privacy: {
-  type: String,
-  enum: ["public", "unlisted", "private"],
-  default: "private", // safe default
-},
+    },
+    privacy: {
+      type: String,
+      enum: ["public", "unlisted", "private"],
+      default: "private", // safe default
+    },
     targets: [
       {
         platform: {
@@ -35,6 +35,10 @@ const postSchema = new mongoose.Schema(
           enum: ["youtube", "facebook", "instagram", "linkedin", "twitter", "whatsapp"],
           required: true,
         },
+        // NAYA: agar user ke facebook/instagram ke multiple pages connected
+        // hain, toh yahan us specific page/account ki platformAccountId
+        // store hoti hai, taaki publish karte waqt sahi page pe post jaye.
+        pageId: { type: String },
         status: {
           type: String,
           enum: ["pending", "published", "failed"],

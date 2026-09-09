@@ -3,8 +3,15 @@ const ConnectedAccount = require("../models/ConnectedAccount");
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
 
-async function publishToInstagram(userId, post) {
-  const account = await ConnectedAccount.findOne({ userId, platform: "instagram" });
+async function publishToInstagram(userId, post, pageId) {
+  // NAYA: agar pageId diya gaya hai (user ne dropdown se specific Instagram
+  // account choose kiya), toh usi account ko dhundo. Agar nahi diya
+  // (backward-compat, ya sirf 1 account connected hai), toh purana
+  // behaviour jaisa pehla match lo.
+  const filter = { userId, platform: "instagram" };
+  if (pageId) filter.platformAccountId = pageId;
+
+  const account = await ConnectedAccount.findOne(filter);
 
   if (!account) {
     throw new Error("Instagram account connected nahi hai");

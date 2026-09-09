@@ -17,4 +17,14 @@ const connectedAccountSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("ConnectedAccount", connectedAccountSchema);    
+// NAYA: pehle sirf { userId, platform } ka ek record ban sakta tha, isliye
+// dusra Facebook page connect karte hi pehla wala overwrite ho jata tha.
+// Ab uniqueness { userId, platform, platformAccountId } par hai, isliye
+// ek user ke multiple Facebook pages (ya multiple Instagram business
+// accounts) alag-alag documents ke roop mein save ho sakte hain.
+connectedAccountSchema.index(
+  { userId: 1, platform: 1, platformAccountId: 1 },
+  { unique: true }
+);
+
+module.exports = mongoose.model("ConnectedAccount", connectedAccountSchema);

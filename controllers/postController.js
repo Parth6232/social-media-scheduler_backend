@@ -2,9 +2,9 @@ const Post = require("../models/Post");
 const { publishToYouTube } = require("../services/youtubePublisher");
 const { publishToFacebook } = require("../services/facebookPublisher");
 const { publishToInstagram } = require("../services/instagramPublisher");
-const cloudinary = require("../config/cloudinary"); // <-- NAYA
+const cloudinary = require("../config/cloudinary");
 
-// NAYA: file ka buffer (memory storage se) seedha Cloudinary par upload karta hai.
+// file ka buffer (memory storage se) seedha Cloudinary par upload karta hai.
 // Local disk ka use hi nahi hota, isliye Render/koi bhi free hosting pe safe hai.
 function uploadBufferToCloudinary(buffer, isVideo) {
   return new Promise((resolve, reject) => {
@@ -30,11 +30,13 @@ async function publishPostNow(post) {
         target.status = "published";
         target.publishedUrl = url;
       } else if (target.platform === "facebook") {
-        const url = await publishToFacebook(post.userId, post);
+        // NAYA: target.pageId batata hai kaunse specific Facebook page par post karna hai
+        const url = await publishToFacebook(post.userId, post, target.pageId);
         target.status = "published";
         target.publishedUrl = url;
       } else if (target.platform === "instagram") {
-        const url = await publishToInstagram(post.userId, post);
+        // NAYA: target.pageId batata hai kaunse specific Instagram business account par post karna hai
+        const url = await publishToInstagram(post.userId, post, target.pageId);
         target.status = "published";
         target.publishedUrl = url;
       } else {
@@ -57,11 +59,12 @@ async function publishPostNow(post) {
 exports.createPost = async (req, res) => {
   try {
     console.log("BODY RECEIVED:", req.body);
-    const { content, scheduledAt, platforms, privacy } = req.body;
+    // NAYA: facebookPageId aur instagramPageId — frontend se aate hain jab
+    // user ke multiple Facebook pages / Instagram accounts connected hon
+    // aur usne dropdown se ek specific page choose kiya ho.
+    const { content, scheduledAt, platforms, privacy, facebookPageId, instagramPageId } = req.body;
     const userId = req.userId;
 
-    // NAYA: local path (req.file.path) ki jagah ab Cloudinary par upload karke
-    // uska secure_url hi mediaUrl banega.
     let mediaUrl = null;
     if (req.file) {
       const isVideo = req.file.mimetype.startsWith("video/");
@@ -74,7 +77,14 @@ exports.createPost = async (req, res) => {
     }
 
     const platformsArray = JSON.parse(platforms);
-    const targets = platformsArray.map((platform) => ({ platform, status: "pending" })); // <-- privacy YAHAN NAHI HONI CHAHIYE
+
+    // NAYA: har target ke saath uska pageId bhi save karte hain (agar diya gaya ho)
+    const targets = platformsArray.map((platform) => {
+      const target = { platform, status: "pending" };
+      if (platform === "facebook" && facebookPageId) target.pageId = facebookPageId;
+      if (platform === "instagram" && instagramPageId) target.pageId = instagramPageId;
+      return target;
+    });
 
     const isInstant = !scheduledAt;
     const finalScheduledAt = isInstant ? new Date() : new Date(scheduledAt);
@@ -84,7 +94,7 @@ exports.createPost = async (req, res) => {
       content,
       mediaUrl,
       scheduledAt: finalScheduledAt,
-      privacy: privacy || "private", // <-- PRIVACY YAHAN, TOP LEVEL PAR
+      privacy: privacy || "private",
       targets,
     });
 
