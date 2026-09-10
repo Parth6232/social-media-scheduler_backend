@@ -4,7 +4,7 @@ const { createPost, getMyPosts } = require("../controllers/postController");
 const authMiddleware = require("../middleware/authMiddleware");
 const upload = require("../middleware/uploadMiddleware"); // NAYA
 
-router.post("/", authMiddleware, upload.single("video"), createPost); // upload.single() add kiya
+router.post("/", authMiddleware, upload.single("media"), createPost);
 router.get("/", authMiddleware, getMyPosts);
 
 module.exports = router;
