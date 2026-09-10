@@ -1,7 +1,7 @@
 const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { sendOtpEmail } = require("../utils/sendEmail");
+const { sendOtpEmail, sendNewDeviceOtpEmail, sendNewDeviceAddedEmail } = require("../utils/sendEmail");
 
 // SIGNUP
 exports.signup = async (req, res) => {
@@ -32,7 +32,7 @@ exports.signup = async (req, res) => {
 // LOGIN
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, deviceId } = req.body;
 
     const user = await User.findOne({ email });
     if (!user) {
@@ -44,13 +44,109 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    if (!deviceId) {
+      return res.status(400).json({ message: "Device identifier missing" });
+    }
+
+    // NAYA: check karo ki ye device pehle se trusted hai ya nahi
+    const isTrustedDevice = (user.trustedDevices || []).some(
+      (d) => d.deviceId === deviceId
+    );
+
+    if (!isTrustedDevice) {
+      // Naya/anjaan device — OTP generate karke email pe bhejo, login abhi complete nahi karo
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const hashedOtp = await bcrypt.hash(otp, 10);
+
+      user.deviceOtp = hashedOtp;
+      user.deviceOtpExpiry = Date.now() + 10 * 60 * 1000; // 10 minute valid
+      user.pendingDeviceId = deviceId;
+      await user.save();
+
+      const userAgent = req.headers["user-agent"] || "";
+      await sendNewDeviceOtpEmail(user.email, otp, userAgent);
+
+      return res.status(200).json({
+        message: "Naya device detect hua. Aapke email par OTP bheja gaya hai.",
+        otpRequired: true,
+        email: user.email,
+      });
+    }
+
+    // Trusted device — normal login
     const token = jwt.sign(
       { userId: user._id },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    // NAYA: user ki basic info bhi response mein bhej do
+    res.json({
+      message: "Login successful",
+      token,
+      user: {
+        userId: user._id,
+        name: user.name,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// VERIFY DEVICE OTP — naye device se login complete karne ke liye
+exports.verifyDeviceOtp = async (req, res) => {
+  try {
+    const { email, otp, deviceId } = req.body;
+
+    if (!email || !otp || !deviceId) {
+      return res.status(400).json({ message: "Sabhi fields zaroori hain" });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user || !user.deviceOtp || !user.deviceOtpExpiry) {
+      return res.status(400).json({ message: "Invalid ya expired OTP" });
+    }
+
+    if (Date.now() > user.deviceOtpExpiry) {
+      user.deviceOtp = null;
+      user.deviceOtpExpiry = null;
+      user.pendingDeviceId = null;
+      await user.save();
+      return res.status(400).json({ message: "OTP expire ho chuka hai, dobara login try karein" });
+    }
+
+    if (user.pendingDeviceId !== deviceId) {
+      return res.status(400).json({ message: "Device mismatch, dobara login try karein" });
+    }
+
+    const isOtpValid = await bcrypt.compare(otp, user.deviceOtp);
+    if (!isOtpValid) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    // OTP sahi hai — is device ko trusted list me add karo
+    user.trustedDevices = user.trustedDevices || [];
+    user.trustedDevices.push({
+      deviceId,
+      userAgent: req.headers["user-agent"] || "",
+      addedAt: new Date(),
+    });
+
+    user.deviceOtp = null;
+    user.deviceOtpExpiry = null;
+    user.pendingDeviceId = null;
+    await user.save();
+
+    // Confirmation alert bhejo ki naya device add ho gaya
+    await sendNewDeviceAddedEmail(user.email, req.headers["user-agent"] || "");
+
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
     res.json({
       message: "Login successful",
       token,
