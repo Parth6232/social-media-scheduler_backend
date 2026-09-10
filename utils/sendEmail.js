@@ -1,16 +1,13 @@
-const nodemailer = require("nodemailer");
+const sgMail = require("@sendgrid/mail");
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// NOTE: Ye wahi email honi chahiye jo SendGrid mein "Single Sender
+// Verification" ke through verify ki hai (Settings > Sender Authentication).
+const FROM_ADDRESS = process.env.SENDGRID_FROM_EMAIL;
 
 async function sendOtpEmail(to, otp) {
-  const mailOptions = {
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sgMail.send({
+    from: FROM_ADDRESS,
     to,
     subject: "SocialBlitz — Password Reset OTP",
     html: `
@@ -24,14 +21,13 @@ async function sendOtpEmail(to, otp) {
         <p style="color: #6b7280; font-size: 13px;">Agar aapne yeh request nahi ki, to is email ko ignore kar dein.</p>
       </div>
     `,
-  };
-  await transporter.sendMail(mailOptions);
+  });
 }
 
 // NAYA: jab koi anjaan/naya device se login try kare, tab OTP + warning email
 async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
-  const mailOptions = {
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sgMail.send({
+    from: FROM_ADDRESS,
     to,
     subject: "⚠️ SocialBlitz — Naye Device Se Login Attempt",
     html: `
@@ -47,14 +43,13 @@ async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
         <p style="color: #b91c1c; font-weight: 600; font-size: 13px;">Agar ye login attempt aapne nahi kiya, to turant apna password badal dein aur ye OTP kisi ke saath share na karein.</p>
       </div>
     `,
-  };
-  await transporter.sendMail(mailOptions);
+  });
 }
 
 // NAYA: OTP verify hone ke baad, confirm karo ki naya device add ho gaya
 async function sendNewDeviceAddedEmail(to, userAgent = "") {
-  const mailOptions = {
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sgMail.send({
+    from: FROM_ADDRESS,
     to,
     subject: "SocialBlitz — Naya Device Aapke Account Se Jud Gaya",
     html: `
@@ -65,8 +60,7 @@ async function sendNewDeviceAddedEmail(to, userAgent = "") {
         <p style="color: #6b7280; font-size: 13px;">Agar ye aap nahi the, turant apna password badal dein.</p>
       </div>
     `,
-  };
-  await transporter.sendMail(mailOptions);
+  });
 }
 
 module.exports = { sendOtpEmail, sendNewDeviceOtpEmail, sendNewDeviceAddedEmail };
