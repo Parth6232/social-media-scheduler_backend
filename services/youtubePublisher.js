@@ -54,7 +54,7 @@ async function publishToYouTube(userId, post) {
     },
   });
 
-  return `https://youtube.com/watch?v=${response.data.id}`;
+  return { url: `https://youtube.com/watch?v=${response.data.id}`, platformPostId: response.data.id };
 }
 
 module.exports = { publishToYouTube };

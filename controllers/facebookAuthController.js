@@ -69,7 +69,9 @@ exports.facebookCallback = async (req, res) => {
     const longLivedToken = longTokenRes.data.access_token;
 
     const pagesRes = await axios.get("https://graph.facebook.com/v21.0/me/accounts", {
-      params: { access_token: longLivedToken },
+      // NAYA: "picture{url}" field add kiya taaki Page ki profile picture
+      // bhi mil jaaye (default fields mein picture nahi aata)
+      params: { access_token: longLivedToken, fields: "id,name,access_token,picture{url}" },
     });
 
     const pages = pagesRes.data.data;
@@ -96,6 +98,7 @@ exports.facebookCallback = async (req, res) => {
           platform: "facebook",
           platformAccountId: page.id,
           displayName: page.name,
+          profilePictureUrl: page.picture?.data?.url, // NAYA
           accessToken: page.access_token,
         },
         { upsert: true, new: true }
@@ -104,11 +107,14 @@ exports.facebookCallback = async (req, res) => {
 
       try {
         const igRes = await axios.get(`https://graph.facebook.com/v21.0/${page.id}`, {
-          params: { fields: "instagram_business_account", access_token: page.access_token },
+          // NAYA: instagram_business_account ke andar profile_picture_url bhi
+          // maang liya, ek hi call mein -- extra API round-trip nahi chahiye
+          params: { fields: "instagram_business_account{id,profile_picture_url}", access_token: page.access_token },
         });
 
         if (igRes.data.instagram_business_account) {
           const igAccountId = igRes.data.instagram_business_account.id;
+          const igProfilePic = igRes.data.instagram_business_account.profile_picture_url; // NAYA
 
           await ConnectedAccount.findOneAndUpdate(
             { userId, platform: "instagram", platformAccountId: igAccountId },
@@ -117,6 +123,7 @@ exports.facebookCallback = async (req, res) => {
               platform: "instagram",
               platformAccountId: igAccountId,
               displayName: page.name + " (Instagram)",
+              profilePictureUrl: igProfilePic, // NAYA
               accessToken: page.access_token,
             },
             { upsert: true, new: true }

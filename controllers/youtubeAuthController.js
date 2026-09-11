@@ -89,6 +89,9 @@ exports.googleCallback = async (req, res) => {
         platform: "youtube",
         platformAccountId: channel.id,
         displayName: channel.snippet.title,
+        // NAYA: "snippet" part already channel.snippet.thumbnails deta hai,
+        // isliye extra API call ki zaroorat nahi -- default thumbnail use kar rahe hain
+        profilePictureUrl: channel.snippet.thumbnails?.default?.url,
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         tokenExpiresAt: new Date(tokens.expiry_date),

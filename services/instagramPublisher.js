@@ -92,8 +92,8 @@ async function publishToInstagram(userId, post, pageId) {
     });
 
     return post.postType === "story"
-      ? `Instagram Story published (id: ${publishRes.data.id}) -- 24hr mein expire ho jayegi`
-      : `https://www.instagram.com/p/${publishRes.data.id}`;
+      ? { url: `Instagram Story published (id: ${publishRes.data.id}) -- 24hr mein expire ho jayegi`, platformPostId: publishRes.data.id }
+      : { url: `https://www.instagram.com/p/${publishRes.data.id}`, platformPostId: publishRes.data.id };
   } catch (error) {
     const igError = error.response?.data?.error?.message || error.message;
     console.error("Instagram publish error:", error.response?.data || error.message);

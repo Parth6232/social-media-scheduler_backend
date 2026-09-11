@@ -10,6 +10,9 @@ const connectedAccountSchema = new mongoose.Schema(
     },
     platformAccountId: { type: String },
     displayName: { type: String },
+    // NAYA: connected account ki profile/page/channel picture ka URL --
+    // Accounts page par name ke aage dikhane ke liye
+    profilePictureUrl: { type: String },
     accessToken: { type: String, required: true },
     refreshToken: { type: String },
     tokenExpiresAt: { type: Date },

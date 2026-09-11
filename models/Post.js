@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { POST_RULES } = require("../config/postRules"); // NAYA: enum ab yahin se derive hota hai
 
 const postSchema = new mongoose.Schema(
   {
@@ -14,12 +15,14 @@ const postSchema = new mongoose.Schema(
     mediaUrl: {
       type: String, // image/video ka link (Cloudinary URL)
     },
-    // NAYA: post kis "type" ka hai -- isi se decide hota hai ki konse
-    // platforms allowed hain aur konsa publish-flow (reel/story/normal) use hoga.
-    // "feed" = purana normal behaviour (photo/video/text post).
+    // NAYA: postType ka enum ab POST_RULES ke keys se aata hai (feed/text/
+    // photo/reel/video/facebookVideo/story) -- pehle sirf ["feed","reel","story"]
+    // hardcoded tha jo naye postTypes (text/photo/video/facebookVideo) ke
+    // liye save karte hi "Validation failed" de raha tha. Ab dono files
+    // hamesha sync rahenge kyunki ek hi source (POST_RULES) se aa rahe hain.
     postType: {
       type: String,
-      enum: ["feed", "reel", "story"],
+      enum: Object.keys(POST_RULES),
       default: "feed",
     },
     scheduledAt: {
@@ -27,8 +30,11 @@ const postSchema = new mongoose.Schema(
       required: true,
     },
     status: {
+      // NAYA: "partial" add kiya -- jab kuch targets publish ho gaye ho aur
+      // kuch fail, tab post "completed" nahi dikhna chahiye (neeche
+      // publishPostNow() mein use hota hai)
       type: String,
-      enum: ["pending", "processing", "completed", "failed"],
+      enum: ["pending", "processing", "completed", "partial", "failed"],
       default: "pending",
     },
     privacy: {
@@ -54,6 +60,14 @@ const postSchema = new mongoose.Schema(
         },
         error: { type: String }, // agar fail ho toh reason yahan store hoga
         publishedUrl: { type: String }, // successful post ka link
+        // NAYA: platform ka raw/native post ID (YouTube video id, FB post/
+        // video id, IG media id) -- URL se parse karna fragile hai (har
+        // postType ka URL format alag hai), isliye publish ke time hi seedha
+        // store karte hain. Isi ID se stats (views/likes) fetch honge.
+        platformPostId: { type: String },
+        views: { type: Number, default: null },
+        likes: { type: Number, default: null },
+        statsUpdatedAt: { type: Date, default: null },
       },
     ],
   },

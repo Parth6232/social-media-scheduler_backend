@@ -50,7 +50,7 @@ async function publishToFacebook(userId, post, pageId) {
           access_token: accessToken,
         },
       });
-      return `https://www.facebook.com/${response.data.id}`;
+      return { url: `https://www.facebook.com/${response.data.id}`, platformPostId: response.data.id };
     }
 
     const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(post.mediaUrl);
@@ -68,7 +68,7 @@ async function publishToFacebook(userId, post, pageId) {
         maxContentLength: Infinity,
       });
 
-      return `https://www.facebook.com/${pageId}/videos/${response.data.id}`;
+      return { url: `https://www.facebook.com/${pageId}/videos/${response.data.id}`, platformPostId: response.data.id };
     }
 
     // Case 3: image post
@@ -81,7 +81,7 @@ async function publishToFacebook(userId, post, pageId) {
       headers: form.getHeaders(),
     });
 
-    return `https://www.facebook.com/${response.data.post_id || response.data.id}`;
+    return { url: `https://www.facebook.com/${response.data.post_id || response.data.id}`, platformPostId: response.data.post_id || response.data.id };
   } catch (error) {
     const fbError = error.response?.data?.error?.message || error.message;
     console.error("Facebook publish error:", error.response?.data || error.message);
@@ -151,7 +151,7 @@ async function publishFacebookReel(pageId, accessToken, post) {
       },
     });
 
-    return `https://www.facebook.com/reel/${video_id}`;
+    return { url: `https://www.facebook.com/reel/${video_id}`, platformPostId: video_id };
   } catch (error) {
     const fbError = error.response?.data?.error?.message || error.message;
     console.error("Facebook Reel publish error:", error.response?.data || error.message);
@@ -171,7 +171,7 @@ async function publishFacebookStory(pageId, accessToken, post) {
         params: { upload_phase: "finish", video_id, access_token: accessToken },
       });
 
-      return `https://www.facebook.com/${finishRes.data.post_id || pageId}`;
+      return { url: `https://www.facebook.com/${finishRes.data.post_id || pageId}`, platformPostId: finishRes.data.post_id || video_id };
     }
 
     // Photo story: pehle photo upload karo (published:false), phir photo_stories se publish
@@ -184,7 +184,7 @@ async function publishFacebookStory(pageId, accessToken, post) {
       params: { photo_id, access_token: accessToken },
     });
 
-    return `https://www.facebook.com/${storyRes.data.post_id || pageId}`;
+    return { url: `https://www.facebook.com/${storyRes.data.post_id || pageId}`, platformPostId: storyRes.data.post_id || photo_id };
   } catch (error) {
     const fbError = error.response?.data?.error?.message || error.message;
     console.error("Facebook Story publish error:", error.response?.data || error.message);
