@@ -79,4 +79,17 @@ function isMediaTypeValid(postType, isVideoFile) {
     return false;
 }
 
-module.exports = { POST_RULES, isPlatformAllowed, isMediaTypeValid };
+const PLATFORM_MEDIA_SUPPORT = {
+    youtube: { none: false, image: false, video: true },
+    facebook: { none: true, image: true, video: true },
+    instagram: { none: false, image: true, video: true },
+};
+
+// Helper: diya gaya platform is media kind (none/image/video) ko accept karta hai ya nahi
+function isPlatformMediaCompatible(platform, mediaKind) {
+    const support = PLATFORM_MEDIA_SUPPORT[platform];
+    if (!support) return true;
+    return !!support[mediaKind];
+}
+
+module.exports = { POST_RULES, isPlatformAllowed, isMediaTypeValid, PLATFORM_MEDIA_SUPPORT, isPlatformMediaCompatible };
