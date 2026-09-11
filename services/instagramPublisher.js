@@ -34,11 +34,22 @@ async function publishToInstagram(userId, post, pageId) {
   try {
     // STEP 1: media container banao
     const containerParams = {
-      caption: post.content,
       access_token: accessToken,
     };
 
-    if (isVideo) {
+    // NAYA STEP 5: Instagram Stories API caption support nahi karta -- agar
+    // caption bheja bhi jaaye toh silently ignore ho jaata hai, isliye
+    // story ke liye bilkul nahi bhej rahe (galatfehmi door karne ke liye).
+    if (post.postType !== "story") {
+      containerParams.caption = post.content;
+    }
+
+    if (post.postType === "story") {
+      // Story: image ya video dono ho sakte hain
+      if (isVideo) containerParams.video_url = publicMediaUrl;
+      else containerParams.image_url = publicMediaUrl;
+      containerParams.media_type = "STORIES";
+    } else if (isVideo) {
       containerParams.media_type = "REELS"; // Instagram par video = Reel
       containerParams.video_url = publicMediaUrl;
     } else {
@@ -54,19 +65,21 @@ async function publishToInstagram(userId, post, pageId) {
     // STEP 2: video ke liye processing complete hone ka wait karo
     if (isVideo) {
       let status = "IN_PROGRESS";
+      let statusDetail = null;
       let attempts = 0;
 
       while (status === "IN_PROGRESS" && attempts < 20) {
         await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second wait
         const statusRes = await axios.get(`${GRAPH_URL}/${creationId}`, {
-          params: { fields: "status_code", access_token: accessToken },
+          params: { fields: "status_code,status", access_token: accessToken },
         });
         status = statusRes.data.status_code;
+        statusDetail = statusRes.data.status; // NAYA: actual error subcode/reason yahan milta hai
         attempts++;
       }
 
       if (status !== "FINISHED") {
-        throw new Error(`Video processing complete nahi hui (status: ${status})`);
+        throw new Error(`Video processing complete nahi hui (status: ${status}${statusDetail ? `, detail: ${statusDetail}` : ""})`);
       }
     }
 
@@ -78,7 +91,9 @@ async function publishToInstagram(userId, post, pageId) {
       },
     });
 
-    return `https://www.instagram.com/p/${publishRes.data.id}`;
+    return post.postType === "story"
+      ? `Instagram Story published (id: ${publishRes.data.id}) -- 24hr mein expire ho jayegi`
+      : `https://www.instagram.com/p/${publishRes.data.id}`;
   } catch (error) {
     const igError = error.response?.data?.error?.message || error.message;
     console.error("Instagram publish error:", error.response?.data || error.message);

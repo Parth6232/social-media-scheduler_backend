@@ -14,6 +14,14 @@ const postSchema = new mongoose.Schema(
     mediaUrl: {
       type: String, // image/video ka link (Cloudinary URL)
     },
+    // NAYA: post kis "type" ka hai -- isi se decide hota hai ki konse
+    // platforms allowed hain aur konsa publish-flow (reel/story/normal) use hoga.
+    // "feed" = purana normal behaviour (photo/video/text post).
+    postType: {
+      type: String,
+      enum: ["feed", "reel", "story"],
+      default: "feed",
+    },
     scheduledAt: {
       type: Date,
       required: true,
