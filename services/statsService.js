@@ -72,19 +72,32 @@ async function fetchFacebookStats(target, account) {
 }
 
 async function fetchInstagramStats(target, account) {
+    const result = { views: null, likes: null };
+
+    // Likes: har media type (image/video/reel) par valid field hai
     try {
-        const res = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
-            // "plays" sirf REELS/VIDEO media par milta hai, images ke liye undefined rahega
-            params: { fields: "like_count,plays", access_token: account.accessToken },
+        const likesRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
+            params: { fields: "like_count", access_token: account.accessToken },
         });
-        return {
-            likes: res.data.like_count ?? null,
-            views: res.data.plays ?? null,
-        };
+        result.likes = likesRes.data.like_count ?? null;
     } catch (error) {
-        console.error(`Instagram stats fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
-        return { views: null, likes: null };
+        console.error(`Instagram likes fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
     }
+
+    // Views ("plays"): SIRF video/Reel media par valid hai -- image post par
+    // ye field hi exist nahi karta, aur agar isse "likes" ke saath ek hi
+    // request mein maanga jaaye toh poori request hi fail ho jaati hai
+    // (isliye likes bhi null aa raha tha). Ab dono calls independent hain.
+    try {
+        const playsRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
+            params: { fields: "plays", access_token: account.accessToken },
+        });
+        result.views = playsRes.data.plays ?? null;
+    } catch (error) {
+        // Image posts ke liye ye hamesha fail hoga -- expected hai, silently ignore
+    }
+
+    return result;
 }
 
 // NAYA: ek single target (post ke andar ek platform-entry) ke stats refresh
