@@ -10,6 +10,29 @@ const GRAPH_URL = "https://graph.facebook.com/v21.0";
 // data nahi mil paaya, { views: null, likes: null } return karte hain taaki
 // ek target ka fail hona baaki targets ke stats refresh ko na roke.
 // ─────────────────────────────────────────────────────────────────────────
+// NAYA: Facebook/Instagram Graph API "ye object exist nahi karta" ke liye
+// broad, reusable detection. Alag-alag post/media types (text status vs
+// photo vs video vs story) alag error code/subcode de sakte hain, isliye
+// sirf ek fixed code match karna fragile hai -- code + subcode + message
+// text teeno ko check karte hain.
+function isMetaObjectMissingError(error) {
+    const fbError = error.response?.data?.error;
+    if (!fbError) return false;
+    const code = fbError.code;
+    const subcode = fbError.error_subcode;
+    const message = (fbError.message || "").toLowerCase();
+
+    // Known "doesn't exist" signals Facebook/Instagram Graph API mein:
+    if (code === 100) return true; // GraphMethodException -- humare apne page/account ke content ke liye almost hamesha "deleted" hi matlab hota hai
+    if (subcode === 33) return true; // "object does not exist"
+    if (code === 24) return true; // Instagram: media not found
+    if (message.includes("does not exist")) return true;
+    if (message.includes("cannot be loaded")) return true;
+    if (message.includes("was deleted")) return true;
+    if (message.includes("unsupported get request")) return true;
+
+    return false; // baaki sab (rate limit, token expired, etc.) transient hai -- "removed" mat maano
+}
 
 async function fetchYouTubeStats(target, account) {
     try {
@@ -43,25 +66,35 @@ async function fetchYouTubeStats(target, account) {
 }
 
 async function fetchFacebookStats(target, account) {
-    const result = { views: null, likes: null, platformStatus: "unknown" }; // NAYA
+    const result = { views: null, likes: null, platformStatus: "unknown" };
+
+    // NAYA: pehle ek halka, dedicated existence-check -- sirf "id" field
+    // maangte hain (likes/views field se bilkul alag), taaki kisi post-type
+    // ke likes-field-quirk se "removed" ka signal confuse na ho.
+    try {
+        await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
+            params: { fields: "id", access_token: account.accessToken },
+        });
+        result.platformStatus = "live";
+    } catch (error) {
+        if (isMetaObjectMissingError(error)) {
+            result.platformStatus = "removed";
+        }
+        console.error(`Facebook existence check failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
+    }
+
+    // Agar removed confirm ho gaya, likes/views fetch karne ka koi matlab nahi
+    if (result.platformStatus === "removed") return result;
 
     try {
         const likesRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
             params: { fields: "likes.summary(true)", access_token: account.accessToken },
         });
         result.likes = likesRes.data.likes?.summary?.total_count ?? null;
-        result.platformStatus = "live"; // NAYA
     } catch (error) {
-        const fbErrorCode = error.response?.data?.error?.code; // NAYA
-        const fbErrorSubcode = error.response?.data?.error?.error_subcode; // NAYA
         console.error(`Facebook likes fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
-        // code 100 + subcode 33 = "Unsupported get request... object does not exist" -- yaani delete ho chuka hai
-        if (fbErrorCode === 100 || fbErrorSubcode === 33) {
-            result.platformStatus = "removed"; // NAYA
-        }
     }
 
-    // (video_insights wala block bilkul same rehne do, usse platformStatus touch mat karo)
     try {
         const insightsRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}/video_insights`, {
             params: { metric: "total_video_views", access_token: account.accessToken },
@@ -76,21 +109,29 @@ async function fetchFacebookStats(target, account) {
 }
 
 async function fetchInstagramStats(target, account) {
-    const result = { views: null, likes: null, platformStatus: "unknown" }; // NAYA
+    const result = { views: null, likes: null, platformStatus: "unknown" };
+
+    try {
+        await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
+            params: { fields: "id", access_token: account.accessToken },
+        });
+        result.platformStatus = "live";
+    } catch (error) {
+        if (isMetaObjectMissingError(error)) {
+            result.platformStatus = "removed";
+        }
+        console.error(`Instagram existence check failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
+    }
+
+    if (result.platformStatus === "removed") return result;
 
     try {
         const likesRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
             params: { fields: "like_count", access_token: account.accessToken },
         });
         result.likes = likesRes.data.like_count ?? null;
-        result.platformStatus = "live"; // NAYA
     } catch (error) {
-        const igErrorCode = error.response?.data?.error?.code; // NAYA
         console.error(`Instagram likes fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
-        // code 100 = "Unsupported get request" / code 24 = "media not found" -- delete ho chuki
-        if (igErrorCode === 100 || igErrorCode === 24) {
-            result.platformStatus = "removed"; // NAYA
-        }
     }
 
     try {
@@ -98,8 +139,8 @@ async function fetchInstagramStats(target, account) {
             params: { fields: "plays", access_token: account.accessToken },
         });
         result.views = playsRes.data.plays ?? null;
-    } catch (error) {
-        // Image posts ke liye ye hamesha fail hoga -- expected hai, silently ignore
+    } catch {
+        // image posts ke liye ye hamesha fail hoga -- expected
     }
 
     return result;
