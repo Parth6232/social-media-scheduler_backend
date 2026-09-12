@@ -244,3 +244,34 @@ exports.refreshPostStats = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// NAYA: Post History se ek specific platform-target hatane ke liye (user
+// ka apna manual delete button). Sirf hamare record se hataता hai --
+// asli platform (Facebook/Instagram/YouTube) par kuch delete nahi hota.
+exports.deletePostTarget = async (req, res) => {
+  try {
+    const { id, platform } = req.params;
+    const post = await Post.findOne({ _id: id, userId: req.userId });
+    if (!post) {
+      return res.status(404).json({ message: "Post nahi mila" });
+    }
+
+    const targetIndex = post.targets.findIndex((t) => t.platform === platform);
+    if (targetIndex === -1) {
+      return res.status(404).json({ message: "Is platform ka target nahi mila" });
+    }
+
+    post.targets.splice(targetIndex, 1);
+
+    // Agar ye is post ka aakhri target tha, to poori post hi hata do
+    if (post.targets.length === 0) {
+      await Post.deleteOne({ _id: post._id });
+      return res.json({ message: "Post history se hata diya gaya", deleted: true });
+    }
+
+    await post.save();
+    res.json({ message: "Platform history se hata diya gaya", deleted: false, post });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};

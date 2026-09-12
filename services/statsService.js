@@ -22,7 +22,6 @@ async function fetchYouTubeStats(target, account) {
         const { credentials } = await oauth2Client.refreshAccessToken();
         oauth2Client.setCredentials(credentials);
 
-        // token refresh ho gaya, DB mein bhi update kar do (jaisa publish flow mein hota hai)
         account.accessToken = credentials.access_token;
         account.tokenExpiresAt = new Date(credentials.expiry_date);
         await account.save();
@@ -30,34 +29,39 @@ async function fetchYouTubeStats(target, account) {
         const youtube = google.youtube({ version: "v3", auth: oauth2Client });
         const res = await youtube.videos.list({ part: "statistics", id: target.platformPostId });
         const stats = res.data.items?.[0]?.statistics;
-        if (!stats) return { views: null, likes: null };
+        if (!stats) return { views: null, likes: null, platformStatus: "removed" };
 
         return {
             views: stats.viewCount != null ? Number(stats.viewCount) : null,
             likes: stats.likeCount != null ? Number(stats.likeCount) : null,
+            platformStatus: "live", // NAYA -- isse pehle missing tha
         };
     } catch (error) {
         console.error(`YouTube stats fetch failed for ${target.platformPostId}:`, error.message);
-        return { views: null, likes: null };
+        return { views: null, likes: null, platformStatus: "unknown" };
     }
 }
 
 async function fetchFacebookStats(target, account) {
-    const result = { views: null, likes: null };
+    const result = { views: null, likes: null, platformStatus: "unknown" }; // NAYA
 
-    // Likes: basic field, koi extra permission nahi chahiye
     try {
         const likesRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
             params: { fields: "likes.summary(true)", access_token: account.accessToken },
         });
         result.likes = likesRes.data.likes?.summary?.total_count ?? null;
+        result.platformStatus = "live"; // NAYA
     } catch (error) {
+        const fbErrorCode = error.response?.data?.error?.code; // NAYA
+        const fbErrorSubcode = error.response?.data?.error?.error_subcode; // NAYA
         console.error(`Facebook likes fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
+        // code 100 + subcode 33 = "Unsupported get request... object does not exist" -- yaani delete ho chuka hai
+        if (fbErrorCode === 100 || fbErrorSubcode === 33) {
+            result.platformStatus = "removed"; // NAYA
+        }
     }
 
-    // Views: video/reel insights ke liye "pages_read_engagement" permission
-    // chahiye. Admin/Tester account se turant kaam karega (Dashboard config
-    // update + reconnect ke baad), general public ke liye App Review lagega.
+    // (video_insights wala block bilkul same rehne do, usse platformStatus touch mat karo)
     try {
         const insightsRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}/video_insights`, {
             params: { metric: "total_video_views", access_token: account.accessToken },
@@ -72,22 +76,23 @@ async function fetchFacebookStats(target, account) {
 }
 
 async function fetchInstagramStats(target, account) {
-    const result = { views: null, likes: null };
+    const result = { views: null, likes: null, platformStatus: "unknown" }; // NAYA
 
-    // Likes: har media type (image/video/reel) par valid field hai
     try {
         const likesRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
             params: { fields: "like_count", access_token: account.accessToken },
         });
         result.likes = likesRes.data.like_count ?? null;
+        result.platformStatus = "live"; // NAYA
     } catch (error) {
+        const igErrorCode = error.response?.data?.error?.code; // NAYA
         console.error(`Instagram likes fetch failed for ${target.platformPostId}:`, error.response?.data?.error?.message || error.message);
+        // code 100 = "Unsupported get request" / code 24 = "media not found" -- delete ho chuki
+        if (igErrorCode === 100 || igErrorCode === 24) {
+            result.platformStatus = "removed"; // NAYA
+        }
     }
 
-    // Views ("plays"): SIRF video/Reel media par valid hai -- image post par
-    // ye field hi exist nahi karta, aur agar isse "likes" ke saath ek hi
-    // request mein maanga jaaye toh poori request hi fail ho jaati hai
-    // (isliye likes bhi null aa raha tha). Ab dono calls independent hain.
     try {
         const playsRes = await axios.get(`${GRAPH_URL}/${target.platformPostId}`, {
             params: { fields: "plays", access_token: account.accessToken },
@@ -121,6 +126,8 @@ async function refreshTargetStats(target, userId) {
     target.views = stats.views;
     target.likes = stats.likes;
     target.statsUpdatedAt = new Date();
+    target.platformStatus = stats.platformStatus || "unknown"; // NAYA
+    target.platformStatusCheckedAt = new Date(); // NAYA
 }
 
 // NAYA: ek pure Post document ke saare "published" targets refresh karo.

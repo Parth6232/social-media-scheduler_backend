@@ -68,6 +68,8 @@ const postSchema = new mongoose.Schema(
         views: { type: Number, default: null },
         likes: { type: Number, default: null },
         statsUpdatedAt: { type: Date, default: null },
+        platformStatus: { type: String, enum: ["live", "removed", "unknown"], default: "unknown" },
+        platformStatusCheckedAt: { type: Date, default: null },
       },
     ],
   },
