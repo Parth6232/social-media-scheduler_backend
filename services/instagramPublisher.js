@@ -4,10 +4,6 @@ const ConnectedAccount = require("../models/ConnectedAccount");
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
 
 async function publishToInstagram(userId, post, pageId) {
-  // NAYA: agar pageId diya gaya hai (user ne dropdown se specific Instagram
-  // account choose kiya), toh usi account ko dhundo. Agar nahi diya
-  // (backward-compat, ya sirf 1 account connected hai), toh purana
-  // behaviour jaisa pehla match lo.
   const filter = { userId, platform: "instagram" };
   if (pageId) filter.platformAccountId = pageId;
 
@@ -25,65 +21,85 @@ async function publishToInstagram(userId, post, pageId) {
   const accessToken = account.accessToken;
 
   const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(post.mediaUrl);
-
-  // NAYA: post.mediaUrl ab pehle se hi Cloudinary ka permanent public URL hai
-  // (postController mein upload ho chuka hota hai), isliye yahan dobara upload
-  // karne ki zaroorat nahi -- seedha use kar sakte hain.
   const publicMediaUrl = post.mediaUrl;
 
   try {
-    // STEP 1: media container banao
     const containerParams = {
       access_token: accessToken,
     };
 
-    // NAYA STEP 5: Instagram Stories API caption support nahi karta -- agar
-    // caption bheja bhi jaaye toh silently ignore ho jaata hai, isliye
-    // story ke liye bilkul nahi bhej rahe (galatfehmi door karne ke liye).
     if (post.postType !== "story") {
       containerParams.caption = post.content;
     }
 
     if (post.postType === "story") {
-      // Story: image ya video dono ho sakte hain
       if (isVideo) containerParams.video_url = publicMediaUrl;
       else containerParams.image_url = publicMediaUrl;
       containerParams.media_type = "STORIES";
     } else if (isVideo) {
-      containerParams.media_type = "REELS"; // Instagram par video = Reel
+      containerParams.media_type = "REELS";
       containerParams.video_url = publicMediaUrl;
     } else {
       containerParams.image_url = publicMediaUrl;
     }
 
-    const containerRes = await axios.post(`${GRAPH_URL}/${igAccountId}/media`, null, {
-      params: containerParams,
-    });
+    // NAYA: Meta ke servers kabhi kabhi image/video URL fetch karne mein ya
+    // video process karne mein fail ho jaate hain -- ye Meta ka khud ka
+    // well-known intermittent issue hai (Cloudinary URL ya code ka fault
+    // nahi). Isliye poora cycle -- container banao, aur video ho to uska
+    // processing status check karo -- 3 baar tak retry karte hain. Video ke
+    // case mein retry par NAYA container banana padta hai.
+    const MAX_ATTEMPTS = 3;
+    let creationId;
+    let lastError;
 
-    const creationId = containerRes.data.id;
-
-    // STEP 2: video ke liye processing complete hone ka wait karo
-    if (isVideo) {
-      let status = "IN_PROGRESS";
-      let statusDetail = null;
-      let attempts = 0;
-
-      while (status === "IN_PROGRESS" && attempts < 20) {
-        await new Promise((resolve) => setTimeout(resolve, 5000)); // 5 second wait
-        const statusRes = await axios.get(`${GRAPH_URL}/${creationId}`, {
-          params: { fields: "status_code,status", access_token: accessToken },
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const containerRes = await axios.post(`${GRAPH_URL}/${igAccountId}/media`, null, {
+          params: containerParams,
         });
-        status = statusRes.data.status_code;
-        statusDetail = statusRes.data.status; // NAYA: actual error subcode/reason yahan milta hai
-        attempts++;
-      }
+        creationId = containerRes.data.id;
 
-      if (status !== "FINISHED") {
-        throw new Error(`Video processing complete nahi hui (status: ${status}${statusDetail ? `, detail: ${statusDetail}` : ""})`);
+        if (isVideo) {
+          let status = "IN_PROGRESS";
+          let statusDetail = null;
+          let pollAttempts = 0;
+
+          while (status === "IN_PROGRESS" && pollAttempts < 20) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            const statusRes = await axios.get(`${GRAPH_URL}/${creationId}`, {
+              params: { fields: "status_code,status", access_token: accessToken },
+            });
+            status = statusRes.data.status_code;
+            statusDetail = statusRes.data.status;
+            pollAttempts++;
+          }
+
+          if (status !== "FINISHED") {
+            throw new Error(`Video processing complete nahi hui (status: ${status}${statusDetail ? `, detail: ${statusDetail}` : ""})`);
+          }
+        }
+
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+        const metaMessage = err.response?.data?.error?.message || err.message || "";
+        const isRetryableError =
+          err.response?.data?.error?.code === 9004 ||
+          err.response?.data?.error?.error_subcode === 2207076 ||
+          /2207076/.test(metaMessage);
+
+        if (attempt < MAX_ATTEMPTS && isRetryableError) {
+          await new Promise((resolve) => setTimeout(resolve, 4000 * attempt));
+          continue;
+        }
+        throw err;
       }
     }
 
-    // STEP 3: container ko publish karo
+    if (lastError) throw lastError;
+
     const publishRes = await axios.post(`${GRAPH_URL}/${igAccountId}/media_publish`, null, {
       params: {
         creation_id: creationId,

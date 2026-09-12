@@ -269,6 +269,18 @@ exports.deletePostTarget = async (req, res) => {
       return res.json({ message: "Post history se hata diya gaya", deleted: true });
     }
 
+    // NAYA: target delete hone ke baad post.status STALE reh jaata tha
+    // (jaise "partial" hamesha ke liye, chahe baaki sab platforms published
+    // hi kyun na hon) -- isliye baaki bache hue targets ke hisaab se status
+    // ko dobara calculate karo, bilkul publishPostNow() wali hi logic se.
+    const remaining = post.targets;
+    const allDone = remaining.every((t) => t.status !== "pending");
+    if (allDone) {
+      const allPublished = remaining.every((t) => t.status === "published");
+      const allFailed = remaining.every((t) => t.status === "failed");
+      post.status = allPublished ? "completed" : allFailed ? "failed" : "partial";
+    }
+
     await post.save();
     res.json({ message: "Platform history se hata diya gaya", deleted: false, post });
   } catch (error) {
