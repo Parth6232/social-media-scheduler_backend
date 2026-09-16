@@ -2,15 +2,25 @@ const axios = require("axios");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTI-PROVIDER MUSIC LIBRARY
-// Providers (priority order):
-//   1. Jamendo      — large CC catalog, API key required (free)
-//   2. Pixabay      — royalty-free, no attribution needed, API key required (free)
-//   3. Free Music Archive (FMA) — CC-licensed, no API key needed
+// Providers:
+//   1. Jamendo   — large CC catalog, API key required (free, 35k req/month)
+//   2. Openverse — free, NO key, aggregates Jamendo + ccMixter + Freesound + more
+//
+// REMOVED (2026): Pixabay "music" API endpoint does not exist publicly
+// (Pixabay only exposes Images/Videos APIs; Music is website-only, not
+// queryable via API key) and the old freemusicarchive.org/api/get/tracks.json
+// endpoint is the pre-2018 legacy FMA API, dead since FMA's ownership change.
+// Both were returning 0 results / errors for every query — that's the bug
+// that was causing "no songs at all" in search.
 //
 // Indian/Hindi content ke liye:
 //   - Jamendo: query me "indian", "sitar", "tabla", "bhangra", "bollywood style" likho
-//   - Pixabay: "indian", "desi", "bhangra", "fusion" tags pe decent results
-//   - FMA:     genre=world filter se Indian artists milte hain
+//   - Openverse: same keywords kaam karte hain, results Jamendo se hi aate hain zyada
+//   - IMPORTANT: koi bhi free/CC library me asli, copyrighted Bollywood/film
+//     songs NAHI milenge — wo sab licensed hain. CC catalogs me sirf
+//     independent/instrumental "Indian-style" tracks milte hain. Agar app me
+//     real Bollywood tracks chahiye to ek licensed music API (e.g. a
+//     commercial sync-licensing provider) leni padegi — free tier me possible nahi.
 //
 // Sab providers ek normalized shape return karte hain:
 //   { externalId, title, artist, duration, previewUrl, genre, image, provider, license }
@@ -18,11 +28,12 @@ const axios = require("axios");
 // ─────────────────────────────────────────────────────────────────────────────
 
 const JAMENDO_CLIENT_ID = process.env.JAMENDO_CLIENT_ID;
-const PIXABAY_API_KEY = process.env.PIXABAY_API_KEY;   // free at pixabay.com/api/docs/
 
 const JAMENDO_BASE = "https://api.jamendo.com/v3.0/tracks/";
-const PIXABAY_BASE = "https://pixabay.com/api/videos/music/"; // music endpoint
-const FMA_BASE = "https://freemusicarchive.org/api/get/tracks.json";
+// Openverse: free, NO API key, aggregates Jamendo + ccMixter + Freesound + WFMU etc.
+// in ek single endpoint me. (Pixabay "music" API aur legacy FMA API dono
+// dead/non-existent hain — 2026 me inhe hata diya gaya, neeche note dekho.)
+const OPENVERSE_BASE = "https://api.openverse.org/v1/audio/";
 
 // ─── Error logging (poori detail, generic message nahi) ──────────────────────
 function logProviderError(label, err) {
@@ -119,89 +130,42 @@ async function searchJamendo(query, limit) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PROVIDER 2: PIXABAY MUSIC
-// Free API key: https://pixabay.com/api/docs/  (no attribution required)
-// Indian query examples: "indian", "bhangra", "sitar", "tabla", "desi fusion"
+// PROVIDER 2: OPENVERSE AUDIO
+// Free, NO API key needed (anonymous access, rate-limited but generous).
+// Aggregates Jamendo + ccMixter + Freesound + WFMU + more in one search.
+// Docs: https://api.openverse.org/v1/audio/  (category=music filters out
+// raw sound-effects). NOTE: results can overlap with our direct Jamendo
+// calls above — that's fine, the dedupe step below (by externalId) handles it.
 // ─────────────────────────────────────────────────────────────────────────────
-function normalizePixabay(t) {
-    // Pixabay music item shape: { id, title, duration, tags, previewURL, url, user }
+function normalizeOpenverse(t) {
+    const rawTag = Array.isArray(t.tags) && t.tags.length ? t.tags[0] : null;
+    const genre = typeof rawTag === "string" ? rawTag : rawTag?.name;
+
     return {
-        externalId: `pixabay_${t.id}`,
+        externalId: `openverse_${t.id}`,
         title: t.title || "Untitled",
-        artist: t.user || "Pixabay Artist",
-        duration: Number(t.duration) || 0,
-        previewUrl: t.previewURL || t.url,
-        genre: (t.tags || "").split(",")[0]?.trim() || "general",
-        image: null,   // Pixabay music API me thumbnail nahi hota
-        provider: "pixabay",
-        license: "Pixabay License (royalty-free, no attribution needed)",
+        artist: t.creator || "Unknown Artist",
+        // Openverse returns duration in milliseconds
+        duration: t.duration ? Math.round(Number(t.duration) / 1000) : 0,
+        previewUrl: t.url, // direct playable audio file URL
+        genre: genre || "general",
+        image: t.thumbnail || null,
+        provider: "openverse",
+        license: t.license ? `CC ${String(t.license).toUpperCase()}` : "Creative Commons",
     };
 }
 
-async function searchPixabay(query, limit) {
-    if (!PIXABAY_API_KEY) {
-        console.warn("[musicLibrary] PIXABAY_API_KEY .env me nahi — Pixabay skip");
-        return [];
-    }
-
+async function searchOpenverse(query, limit) {
     const params = {
-        key: PIXABAY_API_KEY,
-        per_page: Math.min(limit, 200),
+        page_size: Math.min(limit, 100), // Openverse max per page = 100
+        category: "music", // exclude raw sound-effects/podcasts
     };
     if (query?.trim()) params.q = query.trim();
 
-    const { data } = await axios.get(PIXABAY_BASE, { params, timeout: 12000 });
-    return (data?.hits || []).map(normalizePixabay);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PROVIDER 3: FREE MUSIC ARCHIVE (FMA)
-// No API key needed. Indian content: genre_id search ya "world" genre.
-// Note: FMA API thoda slow hai, isliye ye last fallback hai.
-// ─────────────────────────────────────────────────────────────────────────────
-function normalizeFMA(t) {
-    return {
-        externalId: `fma_${t.track_id}`,
-        title: t.track_title || "Untitled",
-        artist: t.artist_name || "Unknown",
-        duration: parseFMADuration(t.track_duration),
-        previewUrl: t.track_file,   // direct mp3 URL
-        genre: t.track_genres?.[0]?.genre_title || "general",
-        image: t.track_image_file || null,
-        provider: "fma",
-        license: t.license_title || "Creative Commons",
-    };
-}
-
-// FMA duration format: "MM:SS" ya "H:MM:SS" — seconds me convert
-function parseFMADuration(str) {
-    if (!str) return 0;
-    const parts = String(str).split(":").map(Number);
-    if (parts.length === 2) return parts[0] * 60 + parts[1];
-    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
-    return Number(str) || 0;
-}
-
-async function searchFMA(query, limit) {
-    // FMA me Indian ke liye "world" genre_id = 9 (approximate)
-    // Agar query Indian-related hai to genre filter lagao
-    const indianKeywords = ["indian", "hindi", "bollywood", "sitar", "tabla",
-        "bhangra", "desi", "punjabi", "sufi", "carnatic"];
-    const isIndian = indianKeywords.some(k => query?.toLowerCase().includes(k));
-
-    const params = {
-        api_key: "60BLHNQCAOUFPIBZ",   // FMA public demo key (read-only, free)
-        limit: Math.min(limit, 50),   // FMA max 50 per call
-        sort: "track_date_recorded",
-    };
-
-    if (query?.trim()) params.search = query.trim();
-    if (isIndian) params.genre_id = 9; // World genre
-
-    const { data } = await axios.get(FMA_BASE, { params, timeout: 15000 });
-    return (data?.dataset || [])
-        .filter(t => t.track_file) // sirf wo tracks jinke paas direct URL hai
-        .map(normalizeFMA);
+    const { data } = await axios.get(OPENVERSE_BASE, { params, timeout: 12000 });
+    return (data?.results || [])
+        .filter(t => t.url) // sirf wo tracks jinke paas playable file URL hai
+        .map(normalizeOpenverse);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -210,18 +174,16 @@ async function searchFMA(query, limit) {
 async function searchFreeTracks({ query = "", limit = 200 } = {}) {
     const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
 
-    // Teeno providers parallel me chalao — jo bhi fail ho uska error log ho,
+    // Dono providers parallel me chalao — jo bhi fail ho uska error log ho,
     // baaki ke results combine ho jaayein
-    const [jamendoResult, pixabayResult, fmaResult] = await Promise.allSettled([
+    const [jamendoResult, openverseResult] = await Promise.allSettled([
         searchJamendo(query, safeLimit).catch(err => { logProviderError("Jamendo", err); return []; }),
-        searchPixabay(query, safeLimit).catch(err => { logProviderError("Pixabay", err); return []; }),
-        searchFMA(query, Math.ceil(safeLimit / 2)).catch(err => { logProviderError("FMA", err); return []; }),
+        searchOpenverse(query, safeLimit).catch(err => { logProviderError("Openverse", err); return []; }),
     ]);
 
     const allTracks = [
         ...(jamendoResult.status === "fulfilled" ? jamendoResult.value : []),
-        ...(pixabayResult.status === "fulfilled" ? pixabayResult.value : []),
-        ...(fmaResult.status === "fulfilled" ? fmaResult.value : []),
+        ...(openverseResult.status === "fulfilled" ? openverseResult.value : []),
     ];
 
     // Dedupe by externalId
@@ -236,7 +198,7 @@ async function searchFreeTracks({ query = "", limit = 200 } = {}) {
     unique.sort((a, b) => lengthScore(a.duration) - lengthScore(b.duration));
 
     const final = unique.slice(0, safeLimit);
-    console.log(`[musicLibrary] query="${query}" → Jamendo:${jamendoResult.value?.length ?? 0} Pixabay:${pixabayResult.value?.length ?? 0} FMA:${fmaResult.value?.length ?? 0} → total:${final.length}`);
+    console.log(`[musicLibrary] query="${query}" → Jamendo:${jamendoResult.value?.length ?? 0} Openverse:${openverseResult.value?.length ?? 0} → total:${final.length}`);
 
     return final;
 }
