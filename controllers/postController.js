@@ -108,7 +108,8 @@ exports.createPost = async (req, res) => {
     }
 
     // NAYA STEP 3: media zaroori hai ya nahi, aur sahi type (image/video) hai ya nahi
-    if (rule.requiresMedia && !req.file) {
+    const hasMedia = !!req.file || !!req.body.mediaUrl;
+    if (rule.requiresMedia && !hasMedia) {
       return res.status(400).json({ message: `${rule.label} ke liye media (image/video) zaroori hai` });
     }
 
@@ -119,7 +120,13 @@ exports.createPost = async (req, res) => {
     // checks se -- lekin YouTube kabhi text/photo accept nahi karta aur
     // Instagram kabhi text-only accept nahi karta, isliye ye publish-time
     // par fail hota tha. Ab yahin, save hone se pehle, reject karte hain.
-    const mediaKind = !req.file ? "none" : req.file.mimetype.startsWith("video/") ? "video" : "image";
+    let mediaKind = "none";
+    if (req.file) {
+      mediaKind = req.file.mimetype.startsWith("video/") ? "video" : "image";
+    } else if (req.body.mediaUrl) {
+      mediaKind = req.body.mediaType === "video" ? "video" : "image";
+    }
+
     const incompatiblePlatforms = platformsArray.filter((p) => !isPlatformMediaCompatible(p, mediaKind));
     if (incompatiblePlatforms.length > 0) {
       const mediaLabel = mediaKind === "none" ? "text-only" : mediaKind === "image" ? "photo" : "video";
@@ -148,6 +155,25 @@ exports.createPost = async (req, res) => {
       if (isVideo && rule.maxDurationSeconds && uploadResult.duration > rule.maxDurationSeconds) {
         return res.status(400).json({
           message: `${rule.label} ke liye video ${rule.maxDurationSeconds} second se lamba nahi ho sakta (aapka video: ${Math.round(uploadResult.duration)} second)`,
+        });
+      }
+    }
+    else if (req.body.mediaUrl) {
+      // Ye path tab chalta hai jab media pehle se /api/media/upload +
+      // /api/media/edit se edit ho chuka hai — dobara upload nahi karna
+      const isVideo = mediaKind === "video";
+      if (!isMediaTypeValid(postType, isVideo)) {
+        const mediaMsg =
+          rule.mediaType === "none"
+            ? "koi bhi media (image/video) allowed nahi hai, sirf text bhejo"
+            : `sirf ${rule.mediaType === "video" ? "video" : "image"} allowed hai`;
+        return res.status(400).json({ message: `${rule.label} ke liye ${mediaMsg}` });
+      }
+      mediaUrl = req.body.mediaUrl;
+      if (isVideo && rule.maxDurationSeconds && req.body.mediaDuration &&
+        Number(req.body.mediaDuration) > rule.maxDurationSeconds) {
+        return res.status(400).json({
+          message: `${rule.label} ke liye video ${rule.maxDurationSeconds} second se lamba nahi ho sakta`,
         });
       }
     }

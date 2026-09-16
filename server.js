@@ -9,6 +9,8 @@ const { startScheduler } = require("./services/scheduler");
 const facebookAuthRoutes = require("./routes/facebookAuthRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const aiRoutes = require("./routes/aiRoutes");
+const mediaRoutes = require("./routes/mediaRoutes");
+
 
 const app = express();
 
@@ -29,6 +31,7 @@ app.use('/api/posts', postRoutes);
 app.use('/api/auth/facebook', facebookAuthRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/media', mediaRoutes);
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   res.status(err.status || 500).json({
