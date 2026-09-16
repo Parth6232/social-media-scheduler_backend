@@ -3,27 +3,56 @@ const axios = require("axios");
 const JAMENDO_CLIENT_ID = process.env.JAMENDO_CLIENT_ID;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// KYUN BADLA (purane code ka bug):
+// HISTORY:
 //
-// Purane code me `durationbetween: "60_90"` ek HARD filter tha. Jamendo pe
-// zyadatar tracks 3-5 minute ke hain, to ye filter 95%+ catalog pehle hi kaat
-// deta tha. Uske upar search term match karna = Discover tab hamesha khali.
+// v1 bug: `durationbetween: "60_90"` ek HARD filter tha. Jamendo pe zyadatar
+// tracks 3-5 minute ke hain, isliye 95%+ catalog pehle hi kaat jaata tha.
 //
-// Ab approach ye hai:
-//   1. Duration ko filter ki jagah SORT/PREFERENCE banaya — reel-length
-//      (~15-120s) tracks upar aate hain, baaki bhi list me rehte hain.
-//   2. Jamendo ke 3 alag search modes try karte hain (namesearch / fuzzytags /
-//      general search) aur results merge karte hain — ek hi mode se kaafi kam
-//      results milte the.
-//   3. `type: "single albumtrack"` — singles bhi include, purane code me sirf
-//      album tracks aate the (Jamendo ka default).
-//   4. limit ab 200 tak (Jamendo ka max) — pehle 30 tha.
-//   5. Jamendo fail ho ya khali de to Openverse (WordPress ka CC media search,
-//      koi API key nahi chahiye) se fallback — extra lakhs of CC tracks.
+// v2 bug (isi file ka pichla version): search zyada wide karne ki koshish me
+// do cheezein add ki thi jo khud hi Jamendo/Openverse dono APIs ko reject
+// karwa rahi thi, isliye HAR search (chahe "mom" jaisa common word ho)
+// khali `[]` aa raha tha:
+//   - Jamendo ke `type` parameter ko "single albumtrack" (space-separated)
+//     value diya tha — Jamendo isko invalid samajh kar poori request hi
+//     error de deta tha, teeno parallel search-modes ke liye.
+//   - Openverse ke `license_type` ko "commercial modification" (space se)
+//     diya tha — Openverse ko comma-separated chahiye ("commercial,modification").
+//   - Dono errors sirf `err.message` se console me log ho rahe the (jo axios
+//     ke liye bekaar generic text deta hai), asli error_message kabhi dikha
+//     hi nahi, isliye bug pakadna mushkil tha.
+//
+// Is version me:
+//   1. `type` param hata diya — Jamendo ka default (album tracks) hi use
+//      hota hai, jo pehle se working tha.
+//   2. Sirf 2 search modes: `namesearch` (naam match) + `search` (general
+//      full-text). `fuzzytags` hataya — wo genre/mood tags ke liye hai,
+//      free-text query ke liye nahi.
+//   3. Openverse `license_type` comma-separated kiya.
+//   4. Duration ab HARD filter nahi, sirf sort-preference hai — reel-length
+//      (15-120s) tracks upar aate hain, baaki bhi list me rehte hain.
+//   5. Har provider error ab poori detail (HTTP status + response body) ke
+//      saath console me print hota hai — agla issue turant dikhega.
+//   6. limit 30 → 200 (Jamendo ka max).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const JAMENDO_BASE = "https://api.jamendo.com/v3.0/tracks/";
 const OPENVERSE_BASE = "https://api.openverse.org/v1/audio/";
+
+// Purane code me sirf err.message log hota tha — jo axios errors ke liye
+// "Request failed with status code 400" jaisa bekaar message deta hai.
+// Asli wajah (Jamendo/Openverse ka apna error_message) response body me hoti
+// hai. Yahi wajah thi ki "sab kuch khali aa raha hai" ka root cause pata
+// nahi chal pa raha tha — ab poori detail console me print hogi.
+function logProviderError(providerLabel, err) {
+    const status = err?.response?.status;
+    const body = err?.response?.data;
+    console.error(
+        `[musicLibrary] ${providerLabel} search failed` +
+        (status ? ` (HTTP ${status})` : "") +
+        `:`,
+        body ? JSON.stringify(body).slice(0, 500) : err?.message || err
+    );
+}
 
 // Reel/Short ke liye ideal length — isse SORT karte hain, filter nahi
 const IDEAL_MIN = 15;
@@ -72,10 +101,8 @@ async function jamendoRequest(params) {
         params: {
             client_id: JAMENDO_CLIENT_ID,
             format: "json",
-            include: "musicinfo licenses",
+            include: "musicinfo",
             audioformat: "mp32",
-            // singles + album tracks dono — default sirf album tracks deta hai
-            type: "single albumtrack",
             imagesize: 200,
             ...params,
         },
@@ -86,7 +113,10 @@ async function jamendoRequest(params) {
 
 // Jamendo ke multiple search modes — merge karke zyada results milte hain
 async function searchJamendo(query, limit) {
-    if (!JAMENDO_CLIENT_ID) return [];
+    if (!JAMENDO_CLIENT_ID) {
+        console.warn("[musicLibrary] JAMENDO_CLIENT_ID .env me set nahi hai — Jamendo search skip ho raha hai.");
+        return [];
+    }
 
     // Khali query = Discover tab pehli baar khulta hai. Popular tracks dikhao
     // taaki user ko khali screen na mile.
@@ -96,16 +126,28 @@ async function searchJamendo(query, limit) {
 
     const q = query.trim();
 
-    // Teeno modes parallel — koi ek fail ho to baaki se kaam chal jaye
-    const [byName, byTags, byGeneral] = await Promise.allSettled([
+    // namesearch = track/artist/album ke naam me match, search = general full-text.
+    // (fuzzytags jaan-boojh kar hata diya — wo genre/mood/instrument tags ke liye
+    // hai, free-text query ke liye nahi, aur bekaar me ek extra API call tha.)
+    const [byName, byGeneral] = await Promise.allSettled([
         jamendoRequest({ limit, namesearch: q }),
-        jamendoRequest({ limit, fuzzytags: q, order: "popularity_total" }),
         jamendoRequest({ limit, search: q }),
     ]);
 
+    const modes = [
+        { label: "namesearch", result: byName },
+        { label: "search", result: byGeneral },
+    ];
+
     const merged = [];
-    for (const r of [byName, byTags, byGeneral]) {
-        if (r.status === "fulfilled") merged.push(...r.value);
+    for (const { label, result } of modes) {
+        if (result.status === "fulfilled") {
+            merged.push(...result.value);
+        } else {
+            // PEHLE ye chup-chaap ignore ho jaata tha — ab console me poora error
+            // dikhega taaki agla issue turant pakad me aa jaaye.
+            logProviderError(`Jamendo (${label})`, result.reason);
+        }
     }
     return merged;
 }
@@ -116,7 +158,7 @@ async function searchOpenverse(query, limit) {
         params: {
             q: query && query.trim() ? query.trim() : "music",
             page_size: Math.min(limit, 20), // Openverse max 20 per page
-            license_type: "commercial modification",
+            license_type: "commercial,modification", // comma-separated — space se Openverse ise samajhta nahi
             category: "music",
         },
         headers: { "User-Agent": "SocialBlitz/1.0" },
@@ -139,7 +181,7 @@ async function searchFreeTracks({ query = "", limit = 200 } = {}) {
     try {
         tracks = await searchJamendo(query, safeLimit);
     } catch (err) {
-        console.error("[musicLibrary] Jamendo search failed:", err.message);
+        logProviderError("Jamendo", err);
     }
 
     // Jamendo se kuch nahi mila (ya down hai) — Openverse try karo
@@ -147,7 +189,7 @@ async function searchFreeTracks({ query = "", limit = 200 } = {}) {
         try {
             tracks = await searchOpenverse(query, safeLimit);
         } catch (err) {
-            console.error("[musicLibrary] Openverse fallback failed:", err.message);
+            logProviderError("Openverse", err);
         }
     }
 
