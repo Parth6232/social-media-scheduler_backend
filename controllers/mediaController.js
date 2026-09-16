@@ -44,9 +44,7 @@ exports.getFilters = (req, res) => {
 // Apne khud ke DB me saved tracks (manually uploaded + Jamendo se import hue)
 exports.getMusicTracks = async (req, res) => {
     try {
-        const tracks = await MusicTrack.find({
-            $or: [{ userId: null }, { userId: req.userId }],
-        }).sort({ createdAt: -1 });
+        const tracks = await MusicTrack.find().sort({ createdAt: -1 });
         res.json(tracks);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -72,26 +70,6 @@ exports.addMusicTrack = async (req, res) => {
     }
 };
 
-// NAYA: User apne device se khud ka audio upload kare (jaisa Insta/Snapchat/
-// Kinemaster me "add your own sound" hota hai). Ye sirf isi user ko dikhega.
-exports.uploadUserAudio = async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ message: "Audio file zaroori hai" });
-        const result = await uploadBufferToCloudinary(req.file.buffer, "video", "socialblitz_user_audio");
-        const track = await MusicTrack.create({
-            title: req.body.title || req.file.originalname,
-            artist: "You",
-            category: "my_upload",
-            publicId: result.public_id,
-            url: result.secure_url,
-            duration: result.duration,
-            userId: req.userId,
-        });
-        res.status(201).json(track);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-};
 // NAYA: Free music library (Jamendo) search — user ko results dikhao
 exports.searchFreeMusic = async (req, res) => {
     try {
@@ -135,6 +113,23 @@ exports.importFreeTrack = async (req, res) => {
     }
 };
 
+// Final video kitni lambi hogi — trim + speed dono ka asar milakar.
+// Ye music layer ki `du_` (duration) set karne ke liye chahiye, taaki gaana
+// exactly video ke saath khatam ho, na pehle na baad me.
+function computeOutputDuration({ trimStart, trimEnd, speed }) {
+    if (trimStart === undefined || trimEnd === undefined) return null;
+    const clipLength = Number(trimEnd) - Number(trimStart);
+    if (!Number.isFinite(clipLength) || clipLength <= 0) return null;
+
+    // e_accelerate:100 => 2x tez => aadhi duration
+    // e_accelerate:-50 => 0.5x => dugni duration
+    const s = Number(speed) || 0;
+    const rate = 1 + s / 100;
+    if (rate <= 0) return clipLength;
+
+    return clipLength / rate;
+}
+
 // STEP 2: Trim + speed + volume + aspect-ratio + rotate + filter + music +
 // watermark — sab ek hi transformation chain me combine ho jaate hai
 exports.buildEditedUrl = async (req, res) => {
@@ -151,6 +146,12 @@ exports.buildEditedUrl = async (req, res) => {
             flip,          // "horizontal" | "vertical"
             filter,
             musicPublicId,
+            // NAYA: gaane ka kaunsa hissa use karna hai (Instagram/Kinemaster style).
+            // Reel max ~90s hoti hai lekin gaana 3-5 min ka hota hai, isliye user
+            // ko gaane ka koi bhi portion chunne dena zaroori hai.
+            musicStartOffset,   // seconds — gaane me se kahan se shuru karein
+            musicVolume,        // 0-200, sirf music layer pe (base video se alag)
+            replaceOriginalAudio, // true = video ka original audio hata do
         } = req.body;
 
         if (!publicId || !resourceType) {
@@ -178,6 +179,12 @@ exports.buildEditedUrl = async (req, res) => {
             transformation.push({ effect: `volume:${volume}` });
         }
 
+        // Original audio poori tarah hata do (Instagram ka "replace audio").
+        // Music overlay se PEHLE aana zaroori hai, warna music bhi mit jayega.
+        if (isVideo && replaceOriginalAudio && musicPublicId) {
+            transformation.push({ audio_codec: "none" });
+        }
+
         // Aspect ratio crop (Reels ke liye 9:16 jaisa)
         if (aspectRatio) {
             transformation.push({ aspect_ratio: aspectRatio, crop: "fill", gravity: "auto" });
@@ -201,11 +208,39 @@ exports.buildEditedUrl = async (req, res) => {
         }
 
         // Music overlay
+        //
+        // Cloudinary docs: audio layer pe so_/eo_/du_ qualifiers `fl_layer_apply`
+        // wale component me jaate hain (e.g. `fl_layer_apply,so_45,du_30`), na ki
+        // `l_video:` wale component me. Isliye overlay definition aur layer_apply
+        // ko do alag components me todna padta hai — purane code me dono ek hi
+        // object me the, jiski wajeh se offset lagana possible hi nahi tha.
         if (isVideo && musicPublicId) {
-            transformation.push({
+            // Layer 1: overlay definition (khulta bracket)
+            const musicLayer = {
                 overlay: { resource_type: "video", public_id: musicPublicId },
-                flags: "layer_apply",
-            });
+            };
+            // Music ka apna volume, base video ke volume se independent
+            if (musicVolume !== undefined && Number(musicVolume) !== 100) {
+                musicLayer.effect = `volume:${musicVolume}`;
+            }
+            transformation.push(musicLayer);
+
+            // Layer 2: layer_apply + timing qualifiers (band hota bracket)
+            const applyMusic = { flags: "layer_apply" };
+
+            // so_ = gaane me se kahan se sample lena hai
+            if (musicStartOffset !== undefined && Number(musicStartOffset) > 0) {
+                applyMusic.start_offset = Number(musicStartOffset);
+            }
+
+            // du_ = kitni der ka sample chahiye. Ise final video ki length ke
+            // barabar rakhte hain taaki music theek video ke saath khatam ho.
+            const outputDuration = computeOutputDuration({ trimStart, trimEnd, speed });
+            if (outputDuration) {
+                applyMusic.duration = Number(outputDuration.toFixed(2));
+            }
+
+            transformation.push(applyMusic);
         }
 
         // Watermark (hamesha last, hamesha on)
