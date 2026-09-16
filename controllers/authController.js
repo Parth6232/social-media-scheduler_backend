@@ -44,11 +44,34 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    // NAYA: Facebook/App-review tester account — isko device OTP check se bypass karo
+    const reviewerEmail = process.env.APP_REVIEW_TEST_EMAIL;
+    const isReviewerAccount =
+      reviewerEmail && user.email.toLowerCase() === reviewerEmail.toLowerCase();
+
+    if (isReviewerAccount) {
+      const token = jwt.sign(
+        { userId: user._id },
+        process.env.JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      return res.json({
+        message: "Login successful",
+        token,
+        user: {
+          userId: user._id,
+          name: user.name,
+          email: user.email,
+        },
+      });
+    }
+
     if (!deviceId) {
       return res.status(400).json({ message: "Device identifier missing" });
     }
 
-    // NAYA: check karo ki ye device pehle se trusted hai ya nahi
+    // check karo ki ye device pehle se trusted hai ya nahi
     const isTrustedDevice = (user.trustedDevices || []).some(
       (d) => d.deviceId === deviceId
     );
