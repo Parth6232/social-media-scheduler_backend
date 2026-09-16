@@ -1,98 +1,62 @@
 const axios = require("axios");
 
-const JAMENDO_CLIENT_ID = process.env.JAMENDO_CLIENT_ID;
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTI-PROVIDER MUSIC LIBRARY
+// Providers (priority order):
+//   1. Jamendo      — large CC catalog, API key required (free)
+//   2. Pixabay      — royalty-free, no attribution needed, API key required (free)
+//   3. Free Music Archive (FMA) — CC-licensed, no API key needed
+//
+// Indian/Hindi content ke liye:
+//   - Jamendo: query me "indian", "sitar", "tabla", "bhangra", "bollywood style" likho
+//   - Pixabay: "indian", "desi", "bhangra", "fusion" tags pe decent results
+//   - FMA:     genre=world filter se Indian artists milte hain
+//
+// Sab providers ek normalized shape return karte hain:
+//   { externalId, title, artist, duration, previewUrl, genre, image, provider, license }
+// Frontend ko kuch nahi todna padega.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HISTORY:
-//
-// v1 bug: `durationbetween: "60_90"` ek HARD filter tha. Jamendo pe zyadatar
-// tracks 3-5 minute ke hain, isliye 95%+ catalog pehle hi kaat jaata tha.
-//
-// v2 bug (isi file ka pichla version): search zyada wide karne ki koshish me
-// do cheezein add ki thi jo khud hi Jamendo/Openverse dono APIs ko reject
-// karwa rahi thi, isliye HAR search (chahe "mom" jaisa common word ho)
-// khali `[]` aa raha tha:
-//   - Jamendo ke `type` parameter ko "single albumtrack" (space-separated)
-//     value diya tha — Jamendo isko invalid samajh kar poori request hi
-//     error de deta tha, teeno parallel search-modes ke liye.
-//   - Openverse ke `license_type` ko "commercial modification" (space se)
-//     diya tha — Openverse ko comma-separated chahiye ("commercial,modification").
-//   - Dono errors sirf `err.message` se console me log ho rahe the (jo axios
-//     ke liye bekaar generic text deta hai), asli error_message kabhi dikha
-//     hi nahi, isliye bug pakadna mushkil tha.
-//
-// Is version me:
-//   1. `type` param hata diya — Jamendo ka default (album tracks) hi use
-//      hota hai, jo pehle se working tha.
-//   2. Sirf 2 search modes: `namesearch` (naam match) + `search` (general
-//      full-text). `fuzzytags` hataya — wo genre/mood tags ke liye hai,
-//      free-text query ke liye nahi.
-//   3. Openverse `license_type` comma-separated kiya.
-//   4. Duration ab HARD filter nahi, sirf sort-preference hai — reel-length
-//      (15-120s) tracks upar aate hain, baaki bhi list me rehte hain.
-//   5. Har provider error ab poori detail (HTTP status + response body) ke
-//      saath console me print hota hai — agla issue turant dikhega.
-//   6. limit 30 → 200 (Jamendo ka max).
-// ─────────────────────────────────────────────────────────────────────────────
+const JAMENDO_CLIENT_ID = process.env.JAMENDO_CLIENT_ID;
+const PIXABAY_API_KEY = process.env.PIXABAY_API_KEY;   // free at pixabay.com/api/docs/
 
 const JAMENDO_BASE = "https://api.jamendo.com/v3.0/tracks/";
-const OPENVERSE_BASE = "https://api.openverse.org/v1/audio/";
+const PIXABAY_BASE = "https://pixabay.com/api/videos/music/"; // music endpoint
+const FMA_BASE = "https://freemusicarchive.org/api/get/tracks.json";
 
-// Purane code me sirf err.message log hota tha — jo axios errors ke liye
-// "Request failed with status code 400" jaisa bekaar message deta hai.
-// Asli wajah (Jamendo/Openverse ka apna error_message) response body me hoti
-// hai. Yahi wajah thi ki "sab kuch khali aa raha hai" ka root cause pata
-// nahi chal pa raha tha — ab poori detail console me print hogi.
-function logProviderError(providerLabel, err) {
+// ─── Error logging (poori detail, generic message nahi) ──────────────────────
+function logProviderError(label, err) {
     const status = err?.response?.status;
     const body = err?.response?.data;
     console.error(
-        `[musicLibrary] ${providerLabel} search failed` +
-        (status ? ` (HTTP ${status})` : "") +
-        `:`,
+        `[musicLibrary] ${label} failed` + (status ? ` (HTTP ${status})` : "") + `:`,
         body ? JSON.stringify(body).slice(0, 500) : err?.message || err
     );
 }
 
-// Reel/Short ke liye ideal length — isse SORT karte hain, filter nahi
-const IDEAL_MIN = 15;
-const IDEAL_MAX = 120;
-
-// Ek track "reel-friendly" hai ya nahi — sorting score ke liye
+// ─── Reel-friendly length scoring (sort ke liye, filter nahi) ────────────────
 function lengthScore(duration) {
     const d = Number(duration) || 0;
-    if (d >= IDEAL_MIN && d <= IDEAL_MAX) return 0; // best
-    if (d > IDEAL_MAX && d <= 240) return 1;        // thoda lamba, chalega
-    if (d > 0 && d < IDEAL_MIN) return 2;           // bahut chhota
-    return 3;                                        // bahut lamba / unknown
+    if (d >= 15 && d <= 120) return 0;   // ideal reel length
+    if (d > 120 && d <= 240) return 1;   // thoda lamba, chalega
+    if (d > 0 && d < 15) return 2;   // bahut chhota
+    return 3;                              // bahut lamba / unknown
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 1: JAMENDO
+// ─────────────────────────────────────────────────────────────────────────────
 function normalizeJamendo(t) {
     return {
         externalId: `jamendo_${t.id}`,
         title: t.name,
         artist: t.artist_name,
         duration: Number(t.duration) || 0,
-        previewUrl: t.audio, // direct streamable mp3
+        previewUrl: t.audio,
         genre: t.musicinfo?.tags?.genres?.[0] || "general",
         image: t.image || t.album_image || null,
         provider: "jamendo",
         license: t.license_ccurl || null,
-    };
-}
-
-function normalizeOpenverse(t) {
-    return {
-        externalId: `openverse_${t.id}`,
-        title: t.title || "Untitled",
-        artist: t.creator || "Unknown",
-        // Openverse duration MILLISECONDS me deta hai — seconds me convert
-        duration: t.duration ? Math.round(Number(t.duration) / 1000) : 0,
-        previewUrl: t.url,
-        genre: (t.genres && t.genres[0]) || (t.category || "general"),
-        image: t.thumbnail || null,
-        provider: "openverse",
-        license: t.license_url || t.license || null,
     };
 }
 
@@ -111,100 +75,170 @@ async function jamendoRequest(params) {
     return (data?.results || []).map(normalizeJamendo);
 }
 
-// Jamendo ke multiple search modes — merge karke zyada results milte hain
 async function searchJamendo(query, limit) {
     if (!JAMENDO_CLIENT_ID) {
-        console.warn("[musicLibrary] JAMENDO_CLIENT_ID .env me set nahi hai — Jamendo search skip ho raha hai.");
+        console.warn("[musicLibrary] JAMENDO_CLIENT_ID .env me nahi — Jamendo skip");
         return [];
     }
 
-    // Khali query = Discover tab pehli baar khulta hai. Popular tracks dikhao
-    // taaki user ko khali screen na mile.
-    if (!query || !query.trim()) {
+    // Empty query = Discover tab — popular tracks dikhao
+    if (!query?.trim()) {
         return jamendoRequest({ limit, order: "popularity_month" });
     }
 
     const q = query.trim();
 
-    // namesearch = track/artist/album ke naam me match, search = general full-text.
-    // (fuzzytags jaan-boojh kar hata diya — wo genre/mood/instrument tags ke liye
-    // hai, free-text query ke liye nahi, aur bekaar me ek extra API call tha.)
-    const [byName, byGeneral] = await Promise.allSettled([
+    // Indian-specific boost: agar query me Indian keywords hain to fuzzytags bhi lagao
+    const indianKeywords = ["indian", "hindi", "bollywood", "sitar", "tabla",
+        "bhangra", "desi", "fusion", "punjabi", "rajasthani",
+        "carnatic", "classical indian", "sufi"];
+    const isIndianQuery = indianKeywords.some(k => q.toLowerCase().includes(k));
+
+    const requests = [
         jamendoRequest({ limit, namesearch: q }),
         jamendoRequest({ limit, search: q }),
-    ]);
-
-    const modes = [
-        { label: "namesearch", result: byName },
-        { label: "search", result: byGeneral },
     ];
 
-    const merged = [];
-    for (const { label, result } of modes) {
-        if (result.status === "fulfilled") {
-            merged.push(...result.value);
-        } else {
-            // PEHLE ye chup-chaap ignore ho jaata tha — ab console me poora error
-            // dikhega taaki agla issue turant pakad me aa jaaye.
-            logProviderError(`Jamendo (${label})`, result.reason);
-        }
+    // Indian query pe extra: tags se bhi search karo
+    if (isIndianQuery) {
+        requests.push(
+            jamendoRequest({ limit, fuzzytags: q }),
+            jamendoRequest({ limit: Math.ceil(limit / 2), tags: "world,indian,ethnic" })
+        );
     }
+
+    const results = await Promise.allSettled(requests);
+    const merged = [];
+
+    results.forEach((r, i) => {
+        if (r.status === "fulfilled") merged.push(...r.value);
+        else logProviderError(`Jamendo (mode-${i})`, r.reason);
+    });
+
     return merged;
 }
 
-// Fallback provider — koi API key nahi chahiye
-async function searchOpenverse(query, limit) {
-    const { data } = await axios.get(OPENVERSE_BASE, {
-        params: {
-            q: query && query.trim() ? query.trim() : "music",
-            page_size: Math.min(limit, 20), // Openverse max 20 per page
-            license_type: "commercial,modification", // comma-separated — space se Openverse ise samajhta nahi
-            category: "music",
-        },
-        headers: { "User-Agent": "SocialBlitz/1.0" },
-        timeout: 12000,
-    });
-    return (data?.results || []).map(normalizeOpenverse);
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 2: PIXABAY MUSIC
+// Free API key: https://pixabay.com/api/docs/  (no attribution required)
+// Indian query examples: "indian", "bhangra", "sitar", "tabla", "desi fusion"
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizePixabay(t) {
+    // Pixabay music item shape: { id, title, duration, tags, previewURL, url, user }
+    return {
+        externalId: `pixabay_${t.id}`,
+        title: t.title || "Untitled",
+        artist: t.user || "Pixabay Artist",
+        duration: Number(t.duration) || 0,
+        previewUrl: t.previewURL || t.url,
+        genre: (t.tags || "").split(",")[0]?.trim() || "general",
+        image: null,   // Pixabay music API me thumbnail nahi hota
+        provider: "pixabay",
+        license: "Pixabay License (royalty-free, no attribution needed)",
+    };
 }
 
-/**
- * Free/royalty-free tracks search.
- * Response shape purane version jaisa hi hai (externalId, title, artist,
- * duration, previewUrl, genre) + 3 naye optional fields: image, provider,
- * license. Frontend ko kuch todna nahi padega.
- */
+async function searchPixabay(query, limit) {
+    if (!PIXABAY_API_KEY) {
+        console.warn("[musicLibrary] PIXABAY_API_KEY .env me nahi — Pixabay skip");
+        return [];
+    }
+
+    const params = {
+        key: PIXABAY_API_KEY,
+        per_page: Math.min(limit, 200),
+    };
+    if (query?.trim()) params.q = query.trim();
+
+    const { data } = await axios.get(PIXABAY_BASE, { params, timeout: 12000 });
+    return (data?.hits || []).map(normalizePixabay);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROVIDER 3: FREE MUSIC ARCHIVE (FMA)
+// No API key needed. Indian content: genre_id search ya "world" genre.
+// Note: FMA API thoda slow hai, isliye ye last fallback hai.
+// ─────────────────────────────────────────────────────────────────────────────
+function normalizeFMA(t) {
+    return {
+        externalId: `fma_${t.track_id}`,
+        title: t.track_title || "Untitled",
+        artist: t.artist_name || "Unknown",
+        duration: parseFMADuration(t.track_duration),
+        previewUrl: t.track_file,   // direct mp3 URL
+        genre: t.track_genres?.[0]?.genre_title || "general",
+        image: t.track_image_file || null,
+        provider: "fma",
+        license: t.license_title || "Creative Commons",
+    };
+}
+
+// FMA duration format: "MM:SS" ya "H:MM:SS" — seconds me convert
+function parseFMADuration(str) {
+    if (!str) return 0;
+    const parts = String(str).split(":").map(Number);
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    return Number(str) || 0;
+}
+
+async function searchFMA(query, limit) {
+    // FMA me Indian ke liye "world" genre_id = 9 (approximate)
+    // Agar query Indian-related hai to genre filter lagao
+    const indianKeywords = ["indian", "hindi", "bollywood", "sitar", "tabla",
+        "bhangra", "desi", "punjabi", "sufi", "carnatic"];
+    const isIndian = indianKeywords.some(k => query?.toLowerCase().includes(k));
+
+    const params = {
+        api_key: "60BLHNQCAOUFPIBZ",   // FMA public demo key (read-only, free)
+        limit: Math.min(limit, 50),   // FMA max 50 per call
+        sort: "track_date_recorded",
+    };
+
+    if (query?.trim()) params.search = query.trim();
+    if (isIndian) params.genre_id = 9; // World genre
+
+    const { data } = await axios.get(FMA_BASE, { params, timeout: 15000 });
+    return (data?.dataset || [])
+        .filter(t => t.track_file) // sirf wo tracks jinke paas direct URL hai
+        .map(normalizeFMA);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 async function searchFreeTracks({ query = "", limit = 200 } = {}) {
     const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
 
-    let tracks = [];
+    // Teeno providers parallel me chalao — jo bhi fail ho uska error log ho,
+    // baaki ke results combine ho jaayein
+    const [jamendoResult, pixabayResult, fmaResult] = await Promise.allSettled([
+        searchJamendo(query, safeLimit).catch(err => { logProviderError("Jamendo", err); return []; }),
+        searchPixabay(query, safeLimit).catch(err => { logProviderError("Pixabay", err); return []; }),
+        searchFMA(query, Math.ceil(safeLimit / 2)).catch(err => { logProviderError("FMA", err); return []; }),
+    ]);
 
-    try {
-        tracks = await searchJamendo(query, safeLimit);
-    } catch (err) {
-        logProviderError("Jamendo", err);
-    }
+    const allTracks = [
+        ...(jamendoResult.status === "fulfilled" ? jamendoResult.value : []),
+        ...(pixabayResult.status === "fulfilled" ? pixabayResult.value : []),
+        ...(fmaResult.status === "fulfilled" ? fmaResult.value : []),
+    ];
 
-    // Jamendo se kuch nahi mila (ya down hai) — Openverse try karo
-    if (tracks.length === 0) {
-        try {
-            tracks = await searchOpenverse(query, safeLimit);
-        } catch (err) {
-            logProviderError("Openverse", err);
-        }
-    }
-
-    // Dedupe — multiple search modes se same track do baar aa sakta hai
+    // Dedupe by externalId
     const seen = new Set();
-    const unique = tracks.filter((t) => {
+    const unique = allTracks.filter(t => {
         if (!t.previewUrl || seen.has(t.externalId)) return false;
         seen.add(t.externalId);
         return true;
     });
 
-    // Reel-friendly length wale tracks pehle
+    // Reel-friendly length wale pehle
     unique.sort((a, b) => lengthScore(a.duration) - lengthScore(b.duration));
 
-    return unique.slice(0, safeLimit);
+    const final = unique.slice(0, safeLimit);
+    console.log(`[musicLibrary] query="${query}" → Jamendo:${jamendoResult.value?.length ?? 0} Pixabay:${pixabayResult.value?.length ?? 0} FMA:${fmaResult.value?.length ?? 0} → total:${final.length}`);
+
+    return final;
 }
 
 module.exports = { searchFreeTracks };
