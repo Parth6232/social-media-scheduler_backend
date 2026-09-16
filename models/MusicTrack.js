@@ -8,6 +8,8 @@ const musicTrackSchema = new mongoose.Schema(
         publicId: { type: String, required: true }, // Cloudinary public_id
         url: { type: String, required: true },
         duration: { type: Number },
+        sourceUrl: { type: String },
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     },
     { timestamps: true }
 );
