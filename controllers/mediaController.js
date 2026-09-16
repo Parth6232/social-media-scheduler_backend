@@ -42,16 +42,25 @@ exports.getFilters = (req, res) => {
 };
 
 // Apne khud ke DB me saved tracks (manually uploaded + Jamendo se import hue)
+//
+// BUG FIX: pehle `MusicTrack.find()` SAARE users ke tracks laata tha — koi
+// filter hi nahi tha. Matlab agar koi user apna personal audio upload karta,
+// to wo har doosre user ki "My Library" me bhi dikhta (privacy leak). Spec
+// yehi tha ki sirf shared tracks (userId: null) + apne khud ke (userId match)
+// dikhne chahiye.
 exports.getMusicTracks = async (req, res) => {
     try {
-        const tracks = await MusicTrack.find().sort({ createdAt: -1 });
+        const tracks = await MusicTrack.find({
+            $or: [{ userId: null }, { userId: req.userId }],
+        }).sort({ createdAt: -1 });
         res.json(tracks);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// Manual upload endpoint (jaisa pehle tha)
+// Manual upload endpoint (jaisa pehle tha) — admin-style, UI me expose nahi
+// karna. userId set nahi karte, isliye ye track sabko "shared" dikhta hai.
 exports.addMusicTrack = async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: "Audio file zaroori hai" });
@@ -63,6 +72,33 @@ exports.addMusicTrack = async (req, res) => {
             publicId: result.public_id,
             url: result.secure_url,
             duration: result.duration,
+        });
+        res.status(201).json(track);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// NAYA (missing tha, isi wajeh se deploy crash ho raha tha): user apne
+// device se khud ka audio upload kare. routes/mediaRoutes.js pehle se hi
+// isko import kar raha tha, lekin ye function kabhi banaya hi nahi gaya tha —
+// isliye `uploadUserAudio` undefined tha aur Express boot hote hi crash ho
+// jaata tha ("argument handler must be a function").
+//
+// addMusicTrack se fark: yahan userId set karte hain, taaki ye track sirf
+// usi user ki "My Library" me dikhe, sabko nahi (dekho getMusicTracks upar).
+exports.uploadUserAudio = async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "Audio file zaroori hai" });
+        const result = await uploadBufferToCloudinary(req.file.buffer, "video", "socialblitz_music");
+        const track = await MusicTrack.create({
+            title: req.body.title || req.file.originalname.replace(/\.[^/.]+$/, ""),
+            artist: req.body.artist || "You",
+            category: req.body.category || "personal",
+            publicId: result.public_id,
+            url: result.secure_url,
+            duration: result.duration,
+            userId: req.userId,
         });
         res.status(201).json(track);
     } catch (error) {
