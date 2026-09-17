@@ -1,4 +1,12 @@
 require("dotenv").config();
+
+// FIX: Render ke network mein IPv6 route available nahi hai, jiski wajah se
+// Gmail SMTP (smtp.gmail.com) jaise IPv6-returning hosts se connect karte waqt
+// "ENETUNREACH" error aata tha. Ye line Node ko DNS lookup mein IPv4 address
+// ko priority dene ke liye force karti hai (Node 18+ required).
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");

@@ -1,16 +1,49 @@
 const nodemailer = require("nodemailer");
 
-// Gmail SMTP transporter — App Password use hota hai, normal Gmail password nahi
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER, // aapka Gmail address, e.g. yourapp@gmail.com
     pass: process.env.EMAIL_PASS, // Google se generate kiya hua 16-character App Password
   },
+  // FIX: Render ke network mein IPv6 route nahi hai — is wajah se Gmail SMTP se
+  // connect karte waqt "ENETUNREACH" aata tha. family: 4 se sirf IPv4 use hoga.
+  // (server.js mein dns.setDefaultResultOrder("ipv4first") bhi isi wajah se hai —
+  // dono milke ye issue permanently khatam karte hain, ye kisi Render setting pe
+  // depend nahi karta isliye future mein wapas nahi aayega)
+  family: 4,
+
+  // SAFETY: agar Gmail server slow respond kare ya na respond kare, request
+  // hamesha ke liye latki na rahe — 10 second ke andar fail/retry ho jaaye
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
 });
 
+// SAFETY: agar koi temporary network blip aaye (jaise ENETUNREACH, ETIMEDOUT,
+// ECONNRESET), toh turant fail hone ke bajaye khud-ba-khud 2 baar aur try kare
+// thodi si delay ke saath, isse ek chhoti si glitch pura flow nahi todegi
+async function sendWithRetry(mailOptions, retries = 2, delayMs = 1500) {
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      await transporter.sendMail(mailOptions);
+      return;
+    } catch (error) {
+      const isLastAttempt = attempt === retries + 1;
+      console.log(`❌ EMAIL SEND FAILED (attempt ${attempt}/${retries + 1}) →`, error.message);
+
+      if (isLastAttempt) {
+        throw error; // saari retries khatam ho gayi, ab error upar bhejo
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 async function sendOtpEmail(to, otp) {
-  await transporter.sendMail({
+  await sendWithRetry({
     from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "SocialBlitz — Password Reset OTP",
@@ -30,7 +63,7 @@ async function sendOtpEmail(to, otp) {
 
 // NAYA: jab koi anjaan/naya device se login try kare, tab OTP + warning email
 async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
-  await transporter.sendMail({
+  await sendWithRetry({
     from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "⚠️ SocialBlitz — Naye Device Se Login Attempt",
@@ -52,7 +85,7 @@ async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
 
 // NAYA: OTP verify hone ke baad, confirm karo ki naya device add ho gaya
 async function sendNewDeviceAddedEmail(to, userAgent = "") {
-  await transporter.sendMail({
+  await sendWithRetry({
     from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "SocialBlitz — Naya Device Aapke Account Se Jud Gaya",
