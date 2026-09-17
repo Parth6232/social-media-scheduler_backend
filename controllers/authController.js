@@ -3,28 +3,44 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendOtpEmail, sendNewDeviceOtpEmail, sendNewDeviceAddedEmail } = require("../utils/sendEmail");
 
+// Helper: email hamesha ek jaisa format me store/search ho (lowercase + trim)
+// Ye "Invalid credentials" wale bugs se bachata hai jo case/extra-space ki wajah se hote hain
+const normalizeEmail = (email) => (email || "").trim().toLowerCase();
+
 // SIGNUP
 exports.signup = async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: "Sabhi fields zaroori hain" });
+    }
+
+    const cleanEmail = normalizeEmail(email);
+    const cleanName = name.trim();
+
     // check karo user pehle se hai kya
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
       return res.status(400).json({ message: "User already exists" });
     }
 
     // password ko hash karo (plain text kabhi store mat karo)
+    // NOTE: password ko trim NAHI karte — password me leading/trailing space
+    // intentional ho sakta hai, sirf email/name jaise identifier fields trim hote hain
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await User.create({
-      name,
-      email,
+      name: cleanName,
+      email: cleanEmail,
       password: hashedPassword,
     });
 
+    console.log("✅ SIGNUP SUCCESS →", { email: user.email, userId: user._id.toString() });
+
     res.status(201).json({ message: "User created", userId: user._id });
   } catch (error) {
+    console.log("❌ SIGNUP ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
@@ -34,22 +50,35 @@ exports.login = async (req, res) => {
   try {
     const { email, password, deviceId } = req.body;
 
-    const user = await User.findOne({ email });
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email aur password zaroori hain" });
+    }
+
+    const cleanEmail = normalizeEmail(email);
+
+    console.log("LOGIN ATTEMPT →", { email: cleanEmail, passwordLength: password.length, deviceId });
+
+    const user = await User.findOne({ email: cleanEmail });
     if (!user) {
+      console.log("❌ USER NOT FOUND for email:", cleanEmail);
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
+    console.log("🔑 PASSWORD MATCH RESULT:", isMatch, "for email:", cleanEmail);
+
     if (!isMatch) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    // NAYA: Facebook/App-review tester account — isko device OTP check se bypass karo
+    // Facebook/App-review tester account — isko device OTP check se bypass karo
     const reviewerEmail = process.env.APP_REVIEW_TEST_EMAIL;
     const isReviewerAccount =
-      reviewerEmail && user.email.toLowerCase() === reviewerEmail.toLowerCase();
+      reviewerEmail && user.email === normalizeEmail(reviewerEmail);
 
     if (isReviewerAccount) {
+      console.log("ℹ️ Reviewer account login — OTP bypass");
+
       const token = jwt.sign(
         { userId: user._id },
         process.env.JWT_SECRET,
@@ -89,6 +118,8 @@ exports.login = async (req, res) => {
       const userAgent = req.headers["user-agent"] || "";
       await sendNewDeviceOtpEmail(user.email, otp, userAgent);
 
+      console.log("📧 New device OTP sent to:", user.email);
+
       return res.status(200).json({
         message: "Naya device detect hua. Aapke email par OTP bheja gaya hai.",
         otpRequired: true,
@@ -103,6 +134,8 @@ exports.login = async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    console.log("✅ LOGIN SUCCESS (trusted device) →", user.email);
+
     res.json({
       message: "Login successful",
       token,
@@ -113,6 +146,7 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
+    console.log("❌ LOGIN ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
@@ -126,7 +160,9 @@ exports.verifyDeviceOtp = async (req, res) => {
       return res.status(400).json({ message: "Sabhi fields zaroori hain" });
     }
 
-    const user = await User.findOne({ email });
+    const cleanEmail = normalizeEmail(email);
+
+    const user = await User.findOne({ email: cleanEmail });
     if (!user || !user.deviceOtp || !user.deviceOtpExpiry) {
       return res.status(400).json({ message: "Invalid ya expired OTP" });
     }
@@ -170,6 +206,8 @@ exports.verifyDeviceOtp = async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    console.log("✅ DEVICE OTP VERIFIED, login complete →", user.email);
+
     res.json({
       message: "Login successful",
       token,
@@ -180,15 +218,23 @@ exports.verifyDeviceOtp = async (req, res) => {
       },
     });
   } catch (error) {
+    console.log("❌ VERIFY OTP ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
+
 // FORGOT PASSWORD — email pe OTP bhejo
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
 
-    const user = await User.findOne({ email });
+    if (!email) {
+      return res.status(400).json({ message: "Email zaroori hai" });
+    }
+
+    const cleanEmail = normalizeEmail(email);
+
+    const user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
       return res.status(404).json({
@@ -208,10 +254,13 @@ exports.forgotPassword = async (req, res) => {
 
     await sendOtpEmail(user.email, otp);
 
+    console.log("📧 Password reset OTP sent to:", user.email);
+
     res.json({
       message: "Is email pe OTP bhej diya gaya hai",
     });
   } catch (error) {
+    console.log("❌ FORGOT PASSWORD ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
@@ -224,7 +273,9 @@ exports.resetPassword = async (req, res) => {
       return res.status(400).json({ message: "Sabhi fields zaroori hain" });
     }
 
-    const user = await User.findOne({ email });
+    const cleanEmail = normalizeEmail(email);
+
+    const user = await User.findOne({ email: cleanEmail });
     if (!user || !user.resetOtp || !user.resetOtpExpiry) {
       return res.status(400).json({ message: "Invalid ya expired OTP" });
     }
@@ -246,8 +297,11 @@ exports.resetPassword = async (req, res) => {
     user.resetOtpExpiry = null;
     await user.save();
 
+    console.log("✅ PASSWORD RESET SUCCESS →", user.email);
+
     res.json({ message: "Password successfully reset ho gaya" });
   } catch (error) {
+    console.log("❌ RESET PASSWORD ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
@@ -277,8 +331,11 @@ exports.changePassword = async (req, res) => {
     user.password = await bcrypt.hash(newPassword, 10);
     await user.save();
 
+    console.log("✅ PASSWORD CHANGE SUCCESS →", user.email);
+
     res.json({ message: "Password successfully change ho gaya" });
   } catch (error) {
+    console.log("❌ CHANGE PASSWORD ERROR →", error.message);
     res.status(500).json({ message: error.message });
   }
 };
