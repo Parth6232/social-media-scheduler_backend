@@ -1,13 +1,17 @@
-const sgMail = require("@sendgrid/mail");
+const nodemailer = require("nodemailer");
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-// NOTE: Ye wahi email honi chahiye jo SendGrid mein "Single Sender
-// Verification" ke through verify ki hai (Settings > Sender Authentication).
-const FROM_ADDRESS = process.env.SENDGRID_FROM_EMAIL;
+// Gmail SMTP transporter — App Password use hota hai, normal Gmail password nahi
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER, // aapka Gmail address, e.g. yourapp@gmail.com
+    pass: process.env.EMAIL_PASS, // Google se generate kiya hua 16-character App Password
+  },
+});
 
 async function sendOtpEmail(to, otp) {
-  await sgMail.send({
-    from: FROM_ADDRESS,
+  await transporter.sendMail({
+    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "SocialBlitz — Password Reset OTP",
     html: `
@@ -26,8 +30,8 @@ async function sendOtpEmail(to, otp) {
 
 // NAYA: jab koi anjaan/naya device se login try kare, tab OTP + warning email
 async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
-  await sgMail.send({
-    from: FROM_ADDRESS,
+  await transporter.sendMail({
+    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "⚠️ SocialBlitz — Naye Device Se Login Attempt",
     html: `
@@ -48,8 +52,8 @@ async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
 
 // NAYA: OTP verify hone ke baad, confirm karo ki naya device add ho gaya
 async function sendNewDeviceAddedEmail(to, userAgent = "") {
-  await sgMail.send({
-    from: FROM_ADDRESS,
+  await transporter.sendMail({
+    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
     to,
     subject: "SocialBlitz — Naya Device Aapke Account Se Jud Gaya",
     html: `
