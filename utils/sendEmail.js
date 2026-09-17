@@ -1,50 +1,45 @@
-const nodemailer = require("nodemailer");
+// FIX: Render ka FREE tier outbound SMTP ports (25, 465, 587) block karta hai
+// (Sep 2025 se) — isliye Nodemailer/SMTP kabhi kaam nahi karega chahe koi bhi
+// provider ho. Solution: email HTTPS API (port 443) se bhejo, jo kabhi block
+// nahi hota. Yahan Brevo ki REST API use ki hai, axios se (axios already
+// package.json mein maujood hai, isliye Node version compatibility ki bhi
+// chinta nahi — fetch() ki tarah naye Node version pe depend nahi karta).
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER, // aapka Gmail address, e.g. yourapp@gmail.com
-    pass: process.env.EMAIL_PASS, // Google se generate kiya hua 16-character App Password
-  },
-  // FIX: Render ke network mein IPv6 route nahi hai — is wajah se Gmail SMTP se
-  // connect karte waqt "ENETUNREACH" aata tha. family: 4 se sirf IPv4 use hoga.
-  // (server.js mein dns.setDefaultResultOrder("ipv4first") bhi isi wajah se hai —
-  // dono milke ye issue permanently khatam karte hain, ye kisi Render setting pe
-  // depend nahi karta isliye future mein wapas nahi aayega)
-  family: 4,
+const axios = require("axios");
 
-  // SAFETY: agar Gmail server slow respond kare ya na respond kare, request
-  // hamesha ke liye latki na rahe — 10 second ke andar fail/retry ho jaaye
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
-});
+const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
 
-// SAFETY: agar koi temporary network blip aaye (jaise ENETUNREACH, ETIMEDOUT,
-// ECONNRESET), toh turant fail hone ke bajaye khud-ba-khud 2 baar aur try kare
-// thodi si delay ke saath, isse ek chhoti si glitch pura flow nahi todegi
-async function sendWithRetry(mailOptions, retries = 2, delayMs = 1500) {
-  for (let attempt = 1; attempt <= retries + 1; attempt++) {
-    try {
-      await transporter.sendMail(mailOptions);
-      return;
-    } catch (error) {
-      const isLastAttempt = attempt === retries + 1;
-      console.log(`❌ EMAIL SEND FAILED (attempt ${attempt}/${retries + 1}) →`, error.message);
-
-      if (isLastAttempt) {
-        throw error; // saari retries khatam ho gayi, ab error upar bhejo
+async function sendViaBrevo({ to, subject, html }) {
+  try {
+    await axios.post(
+      BREVO_API_URL,
+      {
+        sender: {
+          name: "SocialBlitz",
+          email: process.env.BREVO_FROM_EMAIL, // Brevo mein verify kiya hua sender email
+        },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        timeout: 10000, // 10 second — kabhi hang na ho
       }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
+    );
+  } catch (error) {
+    const details = error.response?.data || error.message;
+    console.log("❌ BREVO EMAIL ERROR →", details);
+    throw new Error("Email send failed");
   }
 }
 
 async function sendOtpEmail(to, otp) {
-  await sendWithRetry({
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sendViaBrevo({
     to,
     subject: "SocialBlitz — Password Reset OTP",
     html: `
@@ -63,8 +58,7 @@ async function sendOtpEmail(to, otp) {
 
 // NAYA: jab koi anjaan/naya device se login try kare, tab OTP + warning email
 async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
-  await sendWithRetry({
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sendViaBrevo({
     to,
     subject: "⚠️ SocialBlitz — Naye Device Se Login Attempt",
     html: `
@@ -85,8 +79,7 @@ async function sendNewDeviceOtpEmail(to, otp, userAgent = "") {
 
 // NAYA: OTP verify hone ke baad, confirm karo ki naya device add ho gaya
 async function sendNewDeviceAddedEmail(to, userAgent = "") {
-  await sendWithRetry({
-    from: `"SocialBlitz" <${process.env.EMAIL_USER}>`,
+  await sendViaBrevo({
     to,
     subject: "SocialBlitz — Naya Device Aapke Account Se Jud Gaya",
     html: `
