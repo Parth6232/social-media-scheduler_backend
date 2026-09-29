@@ -93,4 +93,74 @@ async function sendNewDeviceAddedEmail(to, userAgent = "") {
   });
 }
 
-module.exports = { sendOtpEmail, sendNewDeviceOtpEmail, sendNewDeviceAddedEmail };
+// ─────────────────────────────────────────────────────────────────────────
+// NAYA: Post notification email (scheduled / published / partial / failed)
+// ─────────────────────────────────────────────────────────────────────────
+const PLATFORM_LABELS = { youtube: "YouTube", facebook: "Facebook", instagram: "Instagram" };
+
+// User ka content email HTML mein jaata hai, isliye special characters escape karte hain
+function escapeHtml(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatIST(date) {
+  return new Date(date).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+// data = { event: "scheduled"|"published"|"partial"|"failed", content, scheduledAt, targets: [{ platform, status, publishedUrl, error }] }
+async function sendPostNotificationEmail(to, data) {
+  const { event, content, scheduledAt, targets = [] } = data;
+
+  const headings = {
+    scheduled: { subject: "✅ SocialBlitz — Post schedule ho gaya", title: "Aapka post schedule ho gaya", color: "#7C3AED" },
+    published: { subject: "🎉 SocialBlitz — Post publish ho gaya", title: "Aapka post publish ho gaya", color: "#16a34a" },
+    partial: { subject: "⚠️ SocialBlitz — Post sirf kuch platforms par publish hua", title: "Post kuch platforms par publish hua, kuch par fail", color: "#d97706" },
+    failed: { subject: "❌ SocialBlitz — Post publish nahi ho paya", title: "Aapka post publish nahi ho paya", color: "#dc2626" },
+  };
+  const h = headings[event];
+  if (!h) return;
+
+  const preview = escapeHtml(String(content || "").slice(0, 150)) + (String(content || "").length > 150 ? "..." : "");
+
+  const rows = targets
+    .map((t) => {
+      const name = PLATFORM_LABELS[t.platform] || t.platform;
+      if (event === "scheduled") return `<li>${escapeHtml(name)}</li>`;
+      if (t.status === "published") {
+        const link = t.publishedUrl ? ` — <a href="${escapeHtml(t.publishedUrl)}">Post dekhein</a>` : "";
+        return `<li>${escapeHtml(name)}: ✅ published${link}</li>`;
+      }
+      return `<li>${escapeHtml(name)}: ❌ fail${t.error ? ` (${escapeHtml(t.error)})` : ""}</li>`;
+    })
+    .join("");
+
+  const timeLine =
+    event === "scheduled" && scheduledAt
+      ? `<p>Publish hone ka time: <strong>${escapeHtml(formatIST(scheduledAt))} (IST)</strong></p>`
+      : "";
+
+  await sendViaBrevo({
+    to,
+    subject: h.subject,
+    html: `
+      <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
+        <h2 style="color: #7C3AED;">SocialBlitz</h2>
+        <h3 style="color: ${h.color};">${h.title}</h3>
+        <p style="background: #f4f4f5; padding: 12px 16px; border-radius: 8px;">${preview}</p>
+        ${timeLine}
+        <ul>${rows}</ul>
+        <p style="color: #6b7280; font-size: 13px;">Ye email band karne ke liye app mein notification setting off kar dein.</p>
+      </div>
+    `,
+  });
+}
+
+module.exports = { sendOtpEmail, sendNewDeviceOtpEmail, sendNewDeviceAddedEmail, sendPostNotificationEmail };

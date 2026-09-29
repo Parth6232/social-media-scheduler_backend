@@ -2,7 +2,9 @@ const Post = require("../models/Post");
 const { publishToYouTube } = require("../services/youtubePublisher");
 const { publishToFacebook } = require("../services/facebookPublisher");
 const { publishToInstagram } = require("../services/instagramPublisher");
-const { refreshStatsForPost } = require("../services/statsService"); // NAYA
+const { refreshStatsForPost } = require("../services/statsService");
+const { getBestTimes } = require("../services/bestTimeService");
+const { notifyPostEvent } = require("../services/notificationService");
 const cloudinary = require("../config/cloudinary");
 const { POST_RULES, isPlatformAllowed, isMediaTypeValid, isPlatformMediaCompatible } = require("../config/postRules");
 
@@ -72,6 +74,10 @@ async function publishPostNow(post) {
     post.status = "failed"; // safety net, normally yahan aana nahi chahiye
   }
   await post.save();
+
+  // NAYA: email notification (sirf toggle ON hone par -- check notificationService mein hota hai)
+  const eventMap = { completed: "published", failed: "failed", partial: "partial" };
+  notifyPostEvent(post, eventMap[post.status]);
 
   console.log(`✅ Post ${post._id} published`);
 }
@@ -201,6 +207,9 @@ exports.createPost = async (req, res) => {
 
     if (isInstant) {
       publishPostNow(post);
+    } else {
+      // NAYA: scheduled post ka email (sirf toggle ON hone par)
+      notifyPostEvent(post, "scheduled");
     }
 
     res.status(201).json({ message: "Post created", post, instant: isInstant });
@@ -252,8 +261,22 @@ exports.getPlatformSummary = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
-
 exports.publishPostNow = publishPostNow;
+
+// NAYA: Best time to post. Optional query: ?platform=instagram
+exports.getBestTime = async (req, res) => {
+  try {
+    const { platform } = req.query;
+    const allowed = ["youtube", "facebook", "instagram"];
+    if (platform && !allowed.includes(platform)) {
+      return res.status(400).json({ message: "platform galat hai (youtube/facebook/instagram)" });
+    }
+    const result = await getBestTimes(req.userId, platform);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // NAYA: Manual "Refresh stats" button ke liye -- ek specific post ke
 // views/likes turant refresh karo (sirf apna hi post refresh kar sake,

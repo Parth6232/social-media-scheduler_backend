@@ -17,6 +17,7 @@ const userSchema = new mongoose.Schema(
     deviceOtp: { type: String, default: null },
     deviceOtpExpiry: { type: Date, default: null },
     pendingDeviceId: { type: String, default: null },
+    emailNotifications: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

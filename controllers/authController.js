@@ -339,3 +339,36 @@ exports.changePassword = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// NAYA: email notification toggle -- GET (current value) aur PUT (save)
+exports.getNotificationSettings = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select("emailNotifications");
+    if (!user) {
+      return res.status(404).json({ message: "User nahi mila" });
+    }
+    res.json({ emailNotifications: user.emailNotifications === true });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.updateNotificationSettings = async (req, res) => {
+  try {
+    const { emailNotifications } = req.body;
+    if (typeof emailNotifications !== "boolean") {
+      return res.status(400).json({ message: "emailNotifications true ya false hona chahiye" });
+    }
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      { emailNotifications },
+      { new: true }
+    ).select("emailNotifications");
+    if (!user) {
+      return res.status(404).json({ message: "User nahi mila" });
+    }
+    res.json({ message: "Setting save ho gayi", emailNotifications: user.emailNotifications });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
