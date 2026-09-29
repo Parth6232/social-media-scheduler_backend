@@ -42,7 +42,7 @@ async function publishToYouTube(userId, post) {
     part: "snippet,status",
     requestBody: {
       snippet: {
-        title: post.content.slice(0, 90) || "Untitled",
+        title: (post.content.split("\n")[0] || "").slice(0, 90) || "Untitled",
         description: post.content,
       },
       status: {
