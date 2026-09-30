@@ -18,6 +18,7 @@ const facebookAuthRoutes = require("./routes/facebookAuthRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const aiRoutes = require("./routes/aiRoutes");
 const mediaRoutes = require("./routes/mediaRoutes");
+const analyticsRoutes = require("./routes/analyticsRoutes");
 
 
 const app = express();
@@ -40,6 +41,7 @@ app.use('/api/auth/facebook', facebookAuthRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   res.status(err.status || 500).json({
