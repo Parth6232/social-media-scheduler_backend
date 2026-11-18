@@ -4,16 +4,29 @@ const isWin = process.platform === "win32";
 
 const ROOT = path.resolve(process.env.SHORTS_WORK_DIR || path.join(__dirname, "..", "shorts_work"));
 
+function resolveBin(envVar, defaultName) {
+    if (process.env[envVar]) return process.env[envVar];
+    if (isWin) {
+        try {
+            const { execSync } = require("child_process");
+            const out = execSync(`where.exe ${defaultName}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+            const first = out.trim().split(/\r?\n/)[0];
+            if (first) return first.trim();
+        } catch (_) {}
+    }
+    return defaultName;
+}
+
 module.exports = {
     ROOT,
     CACHE_DIR: path.join(ROOT, "cache"), // download ki hui source video + transcript (regenerate fast ho)
     JOBS_DIR: path.join(ROOT, "jobs"),   // har job ka output (3 mp4 + thumbnails)
 
-    // Tools (PATH me hone chahiye, ya .env me full path do)
-    FFMPEG: process.env.FFMPEG_BIN || "ffmpeg",
-    FFPROBE: process.env.FFPROBE_BIN || "ffprobe",
-    YTDLP: process.env.YTDLP_BIN || "yt-dlp",
-    PYTHON: process.env.PYTHON_BIN || (isWin ? "python" : "python3"),
+    // Tools (PATH me hone chahiye, ya .env me full path do, auto-resolved on Windows)
+    FFMPEG: resolveBin("FFMPEG_BIN", "ffmpeg"),
+    FFPROBE: resolveBin("FFPROBE_BIN", "ffprobe"),
+    YTDLP: resolveBin("YTDLP_BIN", "yt-dlp"),
+    PYTHON: resolveBin("PYTHON_BIN", isWin ? "python" : "python3"),
 
     WHISPER_MODEL: process.env.WHISPER_MODEL || "base", // tiny / base / small / medium
 

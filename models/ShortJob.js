@@ -28,7 +28,7 @@ const shortJobSchema = new mongoose.Schema(
         channelId: String,
         thumbnail: String,
         videoDurationSec: Number,
-        authorizedBy: { type: String, enum: ["owner", "creative_commons"], required: true },
+        authorizedBy: { type: String, enum: ["owner", "creative_commons", "any_video"], default: "any_video" },
 
         options: { type: mongoose.Schema.Types.Mixed, default: {} },
 
