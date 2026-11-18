@@ -26,12 +26,29 @@ function findSource(dir) {
     return f ? path.join(dir, f) : null;
 }
 
+function getCookiesArgs() {
+    if (process.env.YOUTUBE_COOKIES) {
+        const tmpPath = path.join(cfg.ROOT, "cookies.txt");
+        try {
+            fs.mkdirSync(cfg.ROOT, { recursive: true });
+            fs.writeFileSync(tmpPath, process.env.YOUTUBE_COOKIES, "utf8");
+            return ["--cookies", tmpPath];
+        } catch (_) {}
+    }
+    const rootCookies = path.resolve(__dirname, "../../cookies.txt");
+    if (fs.existsSync(rootCookies)) {
+        return ["--cookies", rootCookies];
+    }
+    return [];
+}
+
 async function prepareSource(videoId, onProgress = () => {}) {
     const dir = path.join(cfg.CACHE_DIR, videoId);
     fs.mkdirSync(dir, { recursive: true });
 
     let videoPath = findSource(dir);
     if (!videoPath) {
+        const cookiesArgs = getCookiesArgs();
         const runYtdlp = (playerClients) =>
             run(
                 cfg.YTDLP,
@@ -40,8 +57,10 @@ async function prepareSource(videoId, onProgress = () => {}) {
                     "--merge-output-format", "mp4",
                     "--no-playlist", "--no-warnings", "--newline",
                     "--no-check-certificates",
+                    "--js-runtimes", "node",
                     "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "--extractor-args", `youtube:player_client=${playerClients}`,
+                    ...cookiesArgs,
                     "-P", dir,
                     "-o", "source.%(ext)s",
                     `https://www.youtube.com/watch?v=${videoId}`,
