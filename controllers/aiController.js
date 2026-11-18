@@ -732,3 +732,4 @@ exports.generateImage = async (req, res) => {
         res.status(500).json({ message: "AI image generation failed. Please try again." });
     }
 };
+exports.generateWithAutoModel = generateWithAutoModel;

@@ -1,9 +1,5 @@
 require("dotenv").config();
 
-// FIX: Render ke network mein IPv6 route available nahi hai, jiski wajah se
-// Gmail SMTP (smtp.gmail.com) jaise IPv6-returning hosts se connect karte waqt
-// "ENETUNREACH" error aata tha. Ye line Node ko DNS lookup mein IPv4 address
-// ko priority dene ke liye force karti hai (Node 18+ required).
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 
@@ -19,6 +15,8 @@ const accountRoutes = require("./routes/accountRoutes");
 const aiRoutes = require("./routes/aiRoutes");
 const mediaRoutes = require("./routes/mediaRoutes");
 const analyticsRoutes = require("./routes/analyticsRoutes");
+const shortsRoutes = require("./routes/shortsRoutes"); // NAYA: AI Shorts
+const { startShortsMaintenance } = require("./services/shorts/jobRunner"); // NAYA
 
 
 const app = express();
@@ -42,6 +40,7 @@ app.use('/api/accounts', accountRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/media', mediaRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/shorts', shortsRoutes); // NAYA: AI Shorts
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   res.status(err.status || 500).json({
@@ -53,6 +52,7 @@ mongoose
   .then(() => {
     console.log("MongoDB connected successfully");
     startScheduler(); // Scheduler ko start karna
+    startShortsMaintenance(); // NAYA: adhoore jobs fix + purani cache saaf
 
     app.listen(process.env.PORT, () => {
       console.log(`Server running on http://localhost:${process.env.PORT}`);
