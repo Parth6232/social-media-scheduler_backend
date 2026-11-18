@@ -4,6 +4,7 @@ const cfg = require("../config/shortsConfig");
 const cloudinary = require("../config/cloudinary");
 const ShortJob = require("../models/ShortJob");
 const { getVideoInfo } = require("../services/shorts/videoSource");
+const { prepareSource, probe } = require("../services/shorts/downloader");
 const { enqueue, jobDirOf } = require("../services/shorts/jobRunner");
 
 const ACTIVE = ["queued", "downloading", "transcribing", "analyzing", "rendering"];
@@ -143,13 +144,112 @@ exports.createJob = async (req, res) => {
     }
 };
 
+// POST /api/shorts/upload-job   (multipart/form-data: video + optional voiceover)
+// Fields: title, facecamCrop, captions, originalAudio, musicTrackId, musicVolume,
+//         voiceoverVolume, minSec, maxSec  + files: video, voiceover
+exports.createJobFromUpload = async (req, res) => {
+    try {
+        const videoFile = req.files && req.files.video && req.files.video[0];
+        if (!videoFile) {
+            return res.status(400).json({ message: "Video file upload karna zaroori hai" });
+        }
+
+        const active = await ShortJob.findOne({ userId: req.userId, status: { $in: ACTIVE } });
+        if (active) {
+            if (fs.existsSync(videoFile.path)) fs.unlinkSync(videoFile.path);
+            return res.status(409).json({ message: "Aapka ek job pehle se chal raha hai. Use khatam hone do." });
+        }
+
+        const videoId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const dir = path.join(cfg.CACHE_DIR, videoId);
+        fs.mkdirSync(dir, { recursive: true });
+
+        const ext = path.extname(videoFile.originalname) || ".mp4";
+        const destVideo = path.join(dir, `source${ext}`);
+        fs.renameSync(videoFile.path, destVideo);
+
+        const meta = await probe(destVideo);
+        if (meta.duration > cfg.MAX_VIDEO_MINUTES * 60) {
+            fs.rmSync(dir, { recursive: true, force: true });
+            return res.status(400).json({ message: `Video bahut lambi hai. Max ${cfg.MAX_VIDEO_MINUTES} minute allowed hai.` });
+        }
+
+        const originalAudio = toBool(req.body.originalAudio, true);
+        const hasMusic = !!req.body.musicTrackId;
+        const minSec = toNum(req.body.minSec, cfg.DEFAULT_MIN_SEC, 10, cfg.HARD_MAX_SEC - 10);
+        const maxSec = toNum(req.body.maxSec, cfg.DEFAULT_MAX_SEC, minSec + 5, cfg.HARD_MAX_SEC);
+
+        const options = {
+            facecamCrop: toBool(req.body.facecamCrop, false),
+            captions: toBool(req.body.captions, true),
+            originalAudio,
+            musicTrackId: hasMusic ? String(req.body.musicTrackId) : null,
+            musicVolume: toNum(req.body.musicVolume, originalAudio ? 25 : 70, 0, 100),
+            voiceoverVolume: toNum(req.body.voiceoverVolume, 100, 0, 200),
+            minSec,
+            maxSec,
+        };
+
+        const job = await ShortJob.create({
+            userId: req.userId,
+            videoId,
+            sourceUrl: "uploaded_file",
+            videoTitle: req.body.title || videoFile.originalname.replace(/\.[^/.]+$/, ""),
+            channelTitle: "Uploaded Video",
+            channelId: "direct_upload",
+            thumbnail: null,
+            videoDurationSec: Math.round(meta.duration),
+            authorizedBy: "any_video",
+            options,
+        });
+
+        // Agar custom voiceover di ho
+        const voiceFile = req.files && req.files.voiceover && req.files.voiceover[0];
+        if (voiceFile) {
+            const jdir = jobDirOf(job._id);
+            fs.mkdirSync(jdir, { recursive: true });
+            const vext = (path.extname(voiceFile.originalname) || ".mp3").replace(/[^.\w]/g, "").slice(0, 6);
+            const vname = `voiceover${vext}`;
+            fs.renameSync(voiceFile.path, path.join(jdir, vname));
+            job.options = { ...job.options, voiceoverFile: vname };
+            job.markModified("options");
+            await job.save();
+        }
+
+        enqueue(job._id);
+        res.status(201).json(serializeJob(req, job));
+    } catch (e) {
+        handleError(res, e);
+    }
+};
+
 // POST /api/shorts/jobs/:id/regenerate  — wahi settings, naye (alag) timestamps
 exports.regenerate = async (req, res) => {
     try {
         const old = await ShortJob.findOne({ _id: req.params.id, userId: req.userId });
         if (!old) return res.status(404).json({ message: "Job nahi mila" });
 
-        const job = await createJobFrom(req, { url: old.sourceUrl, options: old.options });
+        let job;
+        if (old.sourceUrl === "uploaded_file") {
+            const active = await ShortJob.findOne({ userId: req.userId, status: { $in: ACTIVE } });
+            if (active) {
+                return res.status(409).json({ message: "Aapka ek job pehle se chal raha hai. Use khatam hone do." });
+            }
+            job = await ShortJob.create({
+                userId: req.userId,
+                videoId: old.videoId,
+                sourceUrl: old.sourceUrl,
+                videoTitle: old.videoTitle,
+                channelTitle: old.channelTitle,
+                channelId: old.channelId,
+                thumbnail: old.thumbnail,
+                videoDurationSec: old.videoDurationSec,
+                authorizedBy: old.authorizedBy,
+                options: old.options,
+            });
+        } else {
+            job = await createJobFrom(req, { url: old.sourceUrl, options: old.options });
+        }
 
         // purana voiceover (agar tha) copy karo
         const vf = old.options && old.options.voiceoverFile;
@@ -247,7 +347,8 @@ exports.clipToPost = async (req, res) => {
 
         // includeCredit: default true; false bhejo to credit line nahi aayegi
         const includeCredit = toBool(req.body && req.body.includeCredit, true);
-        const creditLine = includeCredit
+        const hasChannel = job.channelTitle && job.channelTitle !== "Uploaded Video" && job.videoId && !job.videoId.startsWith("up_");
+        const creditLine = (includeCredit && hasChannel)
             ? `\n\nCredit: ${job.channelTitle} — https://youtu.be/${job.videoId}`
             : "";
         const suggestedCaption = `${clip.title}${creditLine}\n\n#shorts`;

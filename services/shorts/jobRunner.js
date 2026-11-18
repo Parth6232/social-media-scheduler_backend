@@ -97,7 +97,8 @@ async function runJob(jobId) {
     const voiceFile = opts.voiceoverFile ? path.join(jobDir, opts.voiceoverFile) : null;
 
     // 4) Render har clip
-    const credit = `Credit: ${job.channelTitle}`;
+    const isDirectUpload = job.sourceUrl === "uploaded_file" || job.channelTitle === "Uploaded Video";
+    const credit = isDirectUpload ? "" : `Credit: ${job.channelTitle}`;
     for (let i = 0; i < moments.length; i++) {
         const m = moments[i];
         const base = 62 + (i / moments.length) * 36;
