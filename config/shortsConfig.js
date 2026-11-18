@@ -1,15 +1,29 @@
 // AI Shorts Generator ki saari settings ek jagah. Sab kuch .env se override ho sakta hai.
 const path = require("path");
+const fs = require("fs");
 const isWin = process.platform === "win32";
 
 const ROOT = path.resolve(process.env.SHORTS_WORK_DIR || path.join(__dirname, "..", "shorts_work"));
+const LOCAL_BIN = path.join(__dirname, "..", "bin");
 
 function resolveBin(envVar, defaultName) {
     if (process.env[envVar]) return process.env[envVar];
+
+    // Check project bin directory (Render ya custom setup ke liye)
+    const localTarget = path.join(LOCAL_BIN, isWin ? `${defaultName}.exe` : defaultName);
+    if (fs.existsSync(localTarget)) return localTarget;
+
     if (isWin) {
         try {
             const { execSync } = require("child_process");
             const out = execSync(`where.exe ${defaultName}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+            const first = out.trim().split(/\r?\n/)[0];
+            if (first) return first.trim();
+        } catch (_) {}
+    } else {
+        try {
+            const { execSync } = require("child_process");
+            const out = execSync(`which ${defaultName}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
             const first = out.trim().split(/\r?\n/)[0];
             if (first) return first.trim();
         } catch (_) {}
