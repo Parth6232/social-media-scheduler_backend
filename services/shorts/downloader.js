@@ -32,23 +32,34 @@ async function prepareSource(videoId, onProgress = () => {}) {
 
     let videoPath = findSource(dir);
     if (!videoPath) {
-        await run(
-            cfg.YTDLP,
-            [
-                "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
-                "--merge-output-format", "mp4",
-                "--no-playlist", "--no-warnings", "--newline",
-                "-P", dir,
-                "-o", "source.%(ext)s",
-                `https://www.youtube.com/watch?v=${videoId}`, // videoId regex se validated hai
-            ],
-            {
-                onLine: (line) => {
-                    const m = line.match(/\[download\]\s+([\d.]+)%/);
-                    if (m) onProgress(Math.min(1, Number(m[1]) / 100));
-                },
-            }
-        );
+        const runYtdlp = (playerClients) =>
+            run(
+                cfg.YTDLP,
+                [
+                    "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                    "--merge-output-format", "mp4",
+                    "--no-playlist", "--no-warnings", "--newline",
+                    "--no-check-certificates",
+                    "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "--extractor-args", `youtube:player_client=${playerClients}`,
+                    "-P", dir,
+                    "-o", "source.%(ext)s",
+                    `https://www.youtube.com/watch?v=${videoId}`,
+                ],
+                {
+                    onLine: (line) => {
+                        const m = line.match(/\[download\]\s+([\d.]+)%/);
+                        if (m) onProgress(Math.min(1, Number(m[1]) / 100));
+                    },
+                }
+            );
+
+        try {
+            await runYtdlp("android,web");
+        } catch (err) {
+            // Cloud/Datacenter IP (Render) par web client block hone par iOS/mweb fallback
+            await runYtdlp("ios,mweb,android");
+        }
         videoPath = findSource(dir);
         if (!videoPath) throw new Error("Video download nahi ho payi (yt-dlp ne file nahi banayi)");
     }
