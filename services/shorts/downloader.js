@@ -26,6 +26,11 @@ function findSource(dir) {
     return f ? path.join(dir, f) : null;
 }
 
+// Optional: residential/rotating proxy (YouTube datacenter IP block ka sabse pakka ilaaj). Render env: YTDLP_PROXY=http://user:pass@host:port
+function getProxyArgs() {
+    return process.env.YTDLP_PROXY ? ["--proxy", process.env.YTDLP_PROXY] : [];
+}
+
 function getCookiesArgs() {
     if (process.env.YOUTUBE_COOKIES) {
         const tmpPath = path.join(cfg.ROOT, "cookies.txt");
@@ -33,7 +38,7 @@ function getCookiesArgs() {
             fs.mkdirSync(cfg.ROOT, { recursive: true });
             fs.writeFileSync(tmpPath, process.env.YOUTUBE_COOKIES, "utf8");
             return ["--cookies", tmpPath];
-        } catch (_) {}
+        } catch (_) { }
     }
     const rootCookies = path.resolve(__dirname, "../../cookies.txt");
     if (fs.existsSync(rootCookies)) {
@@ -42,11 +47,14 @@ function getCookiesArgs() {
     return [];
 }
 
-async function prepareSource(videoId, onProgress = () => {}) {
+async function prepareSource(videoId, onProgress = () => { }) {
     const dir = path.join(cfg.CACHE_DIR, videoId);
     fs.mkdirSync(dir, { recursive: true });
 
     let videoPath = findSource(dir);
+    if (!videoPath && String(videoId).startsWith("up_")) {
+        throw new Error("Uploaded video server se hat chuki hai (cache expire / server restart). Kripya video dobara upload karo.");
+    }
     if (!videoPath) {
         const cookiesArgs = getCookiesArgs();
         const runYtdlp = (playerClients) =>
@@ -61,6 +69,7 @@ async function prepareSource(videoId, onProgress = () => {}) {
                     "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "--extractor-args", `youtube:player_client=${playerClients}`,
                     ...cookiesArgs,
+                    ...getProxyArgs(),
                     "-P", dir,
                     "-o", "source.%(ext)s",
                     `https://www.youtube.com/watch?v=${videoId}`,
@@ -73,14 +82,10 @@ async function prepareSource(videoId, onProgress = () => {}) {
                 }
             );
 
-        // Fallback chain: web_embedded (most reliable, no sign-in needed)
-        // -> web (needs cookies on datacenter IPs)
-        // -> mweb,android (last resort)
-        const strategies = [
-            "web_embedded",          // best for unauthenticated / server IPs
-            "web_embedded,android",  // adds android as fallback format
-            "mweb,android",          // last resort
-        ];
+        // Fallback chain (sabse kam block hone wale clients pehle). Cookies hon to web/mweb bhi chalte hain.
+        const strategies = process.env.YOUTUBE_COOKIES || fs.existsSync(path.resolve(__dirname, "../../cookies.txt"))
+            ? ["web,mweb", "tv", "web_embedded", "mweb,android"]
+            : ["tv", "android_vr", "web_embedded", "mweb,android"];
 
         let lastErr;
         for (const clients of strategies) {

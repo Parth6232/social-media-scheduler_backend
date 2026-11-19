@@ -175,7 +175,7 @@ async function renderClip({ sourceVideo, meta, clip, outDir, index, options, cre
     args.push("-filter_complex", graph, "-map", "[vout]");
     if (a.label) args.push("-map", `[${a.label}]`, "-c:a", "aac", "-b:a", "160k");
     else args.push("-an");
-    args.push("-t", duration.toFixed(2), "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outName);
+    args.push("-t", duration.toFixed(2), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "21", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outName);
 
     // cwd = outDir => ass file ka relative naam use hota hai (Windows path escaping ka jhanjhat nahi)
     await run(cfg.FFMPEG, args, { cwd: outDir });

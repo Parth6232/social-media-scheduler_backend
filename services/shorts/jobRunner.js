@@ -10,6 +10,10 @@ const MusicTrack = require("../../models/MusicTrack");
 const { prepareSource } = require("./downloader");
 const { getTranscript } = require("./transcriber");
 const { pickMoments } = require("./momentPicker");
+const { pickMomentsFast } = require("./fastPicker");
+
+// Fast mode (default ON): Whisper skip, Gemini audio + energy se best moments. Band karne ke liye SHORTS_FAST_MODE=false
+const FAST = process.env.SHORTS_FAST_MODE !== "false";
 const { detectFace } = require("./facecam");
 const { renderClip } = require("./renderer");
 
@@ -73,23 +77,43 @@ async function runJob(jobId) {
     await report("downloading", 3, "Video download ho rahi hai");
     const src = await prepareSource(job.videoId, (p) => report("downloading", 3 + p * 30, "Video download ho rahi hai"));
 
-    // 2) Transcript (Whisper)
-    await report("transcribing", 34, "Transcript ban raha hai (Whisper)");
-    const transcript = await getTranscript(src.dir, src.audioPath, (p) => report("transcribing", 34 + p * 20, "Transcript ban raha hai (Whisper)"));
-
-    // 3) Best moments (Gemini) — pehle ke generations ko avoid karta hai
-    await report("analyzing", 56, "AI best moments dhoondh raha hai");
+    let transcript;
+    let moments;
     const prev = await ShortJob.find({ userId: job.userId, videoId: job.videoId, status: "done", _id: { $ne: job._id } }).select("clips");
     const history = prev.flatMap((j) => j.clips.map((c) => ({ start: c.start, end: c.end })));
-    const { moments, warning } = await pickMoments({
-        transcript,
-        videoDuration: src.meta.duration,
-        videoTitle: job.videoTitle,
-        minSec: opts.minSec,
-        maxSec: opts.maxSec,
-        history,
-    });
-    if (warning) await ShortJob.updateOne({ _id: jobId }, { $set: { warning } });
+
+    if (FAST) {
+        // 2+3) Whisper ke bina: Gemini audio sunkar best 30-40s moments chunta hai (fallback: energy)
+        await report("analyzing", 40, "AI best moments dhoondh raha hai");
+        transcript = { segments: [] }; // captions fast mode me off
+        const r = await pickMomentsFast({
+            dir: src.dir,
+            videoPath: src.videoPath,
+            audioPath: src.audioPath,
+            duration: src.meta.duration,
+            videoTitle: job.videoTitle,
+            history,
+        });
+        moments = r.moments;
+        if (r.warning) await ShortJob.updateOne({ _id: jobId }, { $set: { warning: r.warning } });
+    } else {
+        // 2) Transcript (Whisper)
+        await report("transcribing", 34, "Transcript ban raha hai (Whisper)");
+        transcript = await getTranscript(src.dir, src.audioPath, (p) => report("transcribing", 34 + p * 20, "Transcript ban raha hai (Whisper)"));
+
+        // 3) Best moments (Gemini)
+        await report("analyzing", 56, "AI best moments dhoondh raha hai");
+        const picked = await pickMoments({
+            transcript,
+            videoDuration: src.meta.duration,
+            videoTitle: job.videoTitle,
+            minSec: opts.minSec,
+            maxSec: opts.maxSec,
+            history,
+        });
+        moments = picked.moments;
+        if (picked.warning) await ShortJob.updateOne({ _id: jobId }, { $set: { warning: picked.warning } });
+    }
 
     // Audio files
     let musicFile = null;

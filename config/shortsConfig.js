@@ -19,14 +19,14 @@ function resolveBin(envVar, defaultName) {
             const out = execSync(`where.exe ${defaultName}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
             const first = out.trim().split(/\r?\n/)[0];
             if (first) return first.trim();
-        } catch (_) {}
+        } catch (_) { }
     } else {
         try {
             const { execSync } = require("child_process");
             const out = execSync(`which ${defaultName}`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
             const first = out.trim().split(/\r?\n/)[0];
             if (first) return first.trim();
-        } catch (_) {}
+        } catch (_) { }
     }
     return defaultName;
 }
@@ -53,7 +53,7 @@ module.exports = {
     CACHE_HOURS: Number(process.env.SHORTS_CACHE_HOURS || 24),
     KEEP_JOB_DAYS: Number(process.env.SHORTS_KEEP_JOB_DAYS || 7),
 
-    OUT_W: 1080,
+    OUT_W: 720, OUT_H: 1280,
     OUT_H: 1920,
     CAPTION_FONT: process.env.SHORTS_FONT || "Arial", // Hindi captions ke liye "Nirmala UI" (Windows) try karo
 };
