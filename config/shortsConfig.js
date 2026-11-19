@@ -54,6 +54,5 @@ module.exports = {
     KEEP_JOB_DAYS: Number(process.env.SHORTS_KEEP_JOB_DAYS || 7),
 
     OUT_W: 720, OUT_H: 1280,
-    OUT_H: 1920,
     CAPTION_FONT: process.env.SHORTS_FONT || "Arial", // Hindi captions ke liye "Nirmala UI" (Windows) try karo
 };
