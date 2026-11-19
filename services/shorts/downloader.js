@@ -73,14 +73,31 @@ async function prepareSource(videoId, onProgress = () => {}) {
                 }
             );
 
-        try {
-            await runYtdlp("android,web");
-        } catch (err) {
-            // Cloud/Datacenter IP (Render) par web client block hone par iOS/mweb fallback
-            await runYtdlp("ios,mweb,android");
+        // Fallback chain: web_embedded (most reliable, no sign-in needed)
+        // -> web (needs cookies on datacenter IPs)
+        // -> mweb,android (last resort)
+        const strategies = [
+            "web_embedded",          // best for unauthenticated / server IPs
+            "web_embedded,android",  // adds android as fallback format
+            "mweb,android",          // last resort
+        ];
+
+        let lastErr;
+        for (const clients of strategies) {
+            try {
+                await runYtdlp(clients);
+                videoPath = findSource(dir);
+                if (videoPath) break;  // success
+            } catch (err) {
+                lastErr = err;
+                // Continue to next strategy
+            }
         }
-        videoPath = findSource(dir);
-        if (!videoPath) throw new Error("Video download nahi ho payi (yt-dlp ne file nahi banayi)");
+
+        if (!videoPath) {
+            const msg = lastErr?.message || "Unknown error";
+            throw new Error(`Video download nahi ho payi. Try karo: (1) cookies.txt add karo, ya (2) video directly upload karo. Detail: ${msg}`);
+        }
     }
 
     const audioPath = path.join(dir, "audio.wav");
