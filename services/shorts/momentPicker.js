@@ -67,7 +67,7 @@ function weightedPick(pool, count) {
     return picked;
 }
 
-async function pickMoments({ transcript, videoDuration, videoTitle, count = cfg.CLIP_COUNT, minSec, maxSec, history = [] }) {
+async function pickMoments({ transcript, videoDuration, videoTitle, count = cfg.CLIP_COUNT, minSec, maxSec, history = [], llm }) {
     const segments = transcript.segments.filter((s) => s.text);
     if (!segments.length) throw new Error("Video me bolne wala content (speech) nahi mila");
 
@@ -100,7 +100,7 @@ Reply with ONLY a JSON array, no markdown:
 TRANSCRIPT:
 ${text}`;
 
-    const raw = await generateWithAutoModel(prompt);
+    const raw = await (llm || generateWithAutoModel)(prompt); // llm: optional custom AI (Gemini -> Groq fallback)
     let candidates;
     try {
         candidates = parseJsonArray(raw.replace(/```json|```/g, ""));

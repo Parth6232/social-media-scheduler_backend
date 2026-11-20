@@ -8,7 +8,8 @@ const path = require("path");
 const cfg = require("../../config/shortsConfig");
 const { run } = require("./runCommand");
 const { generateWithAutoModel } = require("../../controllers/aiController");
-const { overlapRatio } = require("./momentPicker");
+const { overlapRatio, pickMoments } = require("./momentPicker");
+const { hasGroq, groqTranscribe, groqChat, clean } = require("./groq");
 
 const MIN_SEC = Number(process.env.SHORTS_FAST_MIN_SEC || 30);
 const MAX_SEC = Number(process.env.SHORTS_FAST_MAX_SEC || 40);
@@ -26,13 +27,14 @@ const ANGLES = [
 ];
 
 // ---------- 1) chhota audio ----------
-async function makeSmallAudio(dir, videoPath) {
+async function makeSmallAudio(dir, videoPath, wavPath) {
     const out = path.join(dir, "audio_small.mp3");
     if (fs.existsSync(out) && fs.statSync(out).size <= MAX_INLINE_BYTES) return out;
     for (const br of ["24k", "12k"]) {
         await run(cfg.FFMPEG, [
             "-y", "-hide_banner", "-loglevel", "error",
-            "-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", "-b:a", br, out,
+            "-i", wavPath && fs.existsSync(wavPath) ? wavPath : videoPath, // wav se banana tez hai (video dobara read nahi hoti)
+            "-vn", "-ac", "1", "-ar", "16000", "-b:a", br, out,
         ]);
         if (fs.statSync(out).size <= MAX_INLINE_BYTES) return out;
     }
@@ -177,38 +179,83 @@ function choose(cands, count, history, picked = []) {
     return picked;
 }
 
+// Text AI: pehle Gemini, fail ho to Groq (Llama) — dono free
+async function smartLLM(prompt) {
+    const errs = [];
+    if (process.env.GEMINI_API_KEY) {
+        try { return await generateWithAutoModel(prompt); } catch (e) { errs.push("Gemini: " + clean(e.message)); }
+    }
+    if (hasGroq()) {
+        try { return await groqChat(prompt.slice(0, 30000)); } catch (e) { errs.push("Groq: " + clean(e.message)); }
+    }
+    throw new Error(errs.join(" | ") || "Koi AI key set nahi hai (GEMINI_API_KEY / GROQ_API_KEY)");
+}
+
+// Transcript cache me save hota hai (regenerate par dobara API call nahi)
+async function getTranscriptFast(dir, smallMp3) {
+    const cached = path.join(dir, "transcript.json");
+    if (fs.existsSync(cached)) return JSON.parse(fs.readFileSync(cached, "utf8"));
+    const t = await groqTranscribe(smallMp3);
+    fs.writeFileSync(cached, JSON.stringify(t), "utf8");
+    return t;
+}
+
+// Fallback chain:
+//   A) Groq transcript  -> AI (Gemini/Groq) transcript padhkar best moments  (captions bhi milte hain)
+//   B) Gemini audio sunkar best moments
+//   C) Audio energy (loud/high-energy hisse)
 async function pickMomentsFast({ dir, videoPath, audioPath, duration, videoTitle, history = [], count = cfg.CLIP_COUNT }) {
     const minSec = MIN_SEC;
     const maxSec = MAX_SEC;
     let picked = [];
-    let warning = null;
+    let transcript = null;
+    const notes = []; // fail hone ki wajah (user ko warning me dikhegi)
 
-    // A) Gemini audio (best quality)
-    if (process.env.GEMINI_API_KEY) {
+    let small = null;
+    try { small = await makeSmallAudio(dir, videoPath, audioPath); } catch (e) { notes.push("Audio: " + clean(e.message)); }
+    if (!small) notes.push("Video bahut lambi hai AI ke liye");
+
+    // A) transcript based
+    if (small && hasGroq()) {
         try {
-            const small = await makeSmallAudio(dir, videoPath);
-            if (small) {
-                const raw = await geminiMoments(small, { videoTitle, duration, minSec, maxSec, history });
-                picked = choose(normalizeCandidates(raw, { duration, minSec, maxSec }), count, history);
-            } else {
-                warning = "Video bahut lambi hai AI ke liye, isliye energy se best hisse chune gaye.";
-            }
+            transcript = await getTranscriptFast(dir, small);
+            const r = await pickMoments({ transcript, videoDuration: duration, videoTitle, count, minSec, maxSec, history, llm: smartLLM });
+            picked = r.moments;
+        } catch (e) {
+            console.warn("[Shorts] transcript pick fail:", e.message);
+            notes.push(clean(e.message));
+        }
+    } else if (!hasGroq()) {
+        notes.push("GROQ_API_KEY set nahi hai");
+    }
+
+    // B) Gemini audio
+    if (picked.length < count && small && process.env.GEMINI_API_KEY) {
+        try {
+            const raw = await geminiMoments(small, { videoTitle, duration, minSec, maxSec, history });
+            picked = choose(normalizeCandidates(raw, { duration, minSec, maxSec }), count, history, picked);
         } catch (e) {
             console.warn("[Shorts] Gemini audio pick fail:", e.message);
-            warning = "AI se moments nahi mile, isliye energy se best hisse chune gaye.";
+            notes.push("Gemini audio: " + clean(e.message));
         }
     }
 
-    // B) Fallback / top-up: energy se
+    // C) energy
+    let usedEnergy = false;
     if (picked.length < count && audioPath && fs.existsSync(audioPath)) {
         const cands = energyMoments(secondEnergy(audioPath), duration, { minSec, maxSec });
         picked = choose(cands, count, history, picked);
+        usedEnergy = true;
     }
 
     if (!picked.length) throw new Error("Is video me se moments nahi mil paye. Doosri video try karo.");
     picked.sort((a, b) => a.start - b.start);
     picked.forEach((m, i) => { if (!m.title || m.title === "Best moment") m.title = `Short ${i + 1}`; });
-    return { moments: picked, warning };
+
+    const warning = usedEnergy
+        ? ("AI se best moments nahi mile, loud/energetic hisse chune gaye. Wajah: " + (notes.join(" | ") || "unknown")).slice(0, 400)
+        : null;
+    return { moments: picked, transcript, warning };
 }
 
 module.exports = { pickMomentsFast, secondEnergy, energyMoments };

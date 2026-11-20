@@ -95,6 +95,7 @@ async function runJob(jobId) {
             history,
         });
         moments = r.moments;
+        if (r.transcript) transcript = r.transcript; // Groq transcript mila to captions bhi aayenge
         if (r.warning) await ShortJob.updateOne({ _id: jobId }, { $set: { warning: r.warning } });
     } else {
         // 2) Transcript (Whisper)
