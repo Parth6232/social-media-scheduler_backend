@@ -6,6 +6,7 @@ const ShortJob = require("../models/ShortJob");
 const { getVideoInfo } = require("../services/shorts/videoSource");
 const { prepareSource, probe } = require("../services/shorts/downloader");
 const { enqueue, jobDirOf } = require("../services/shorts/jobRunner");
+const { resolveRange } = require("../services/shorts/range");
 
 const ACTIVE = ["queued", "downloading", "transcribing", "analyzing", "rendering"];
 
@@ -17,7 +18,7 @@ const toNum = (v, def, min, max) => {
 
 function handleError(res, error) {
     if (error.name === "CastError") return res.status(400).json({ message: "Galat ID" });
-    res.status(error.status || 500).json({ message: error.message });
+    res.status(error.status || 500).json({ message: error.message, code: error.shortsCode, data: error.data });
 }
 
 function fileUrl(req, jobId, name) {
@@ -36,6 +37,7 @@ function serializeJob(req, job) {
         thumbnail: j.thumbnail,
         authorizedBy: j.authorizedBy,
         options: { ...j.options, voiceoverFile: undefined, hasVoiceover: !!(j.options && j.options.voiceoverFile) },
+        range: j.options && j.options.rangeStartSec != null ? { start: j.options.rangeStartSec, end: j.options.rangeEndSec } : null,
         status: j.status,
         progress: j.progress,
         stage: j.stage,
@@ -63,20 +65,18 @@ function serializeJob(req, job) {
 exports.sourceInfo = async (req, res) => {
     try {
         const info = await getVideoInfo(req.userId, req.body.url);
-        res.json(info);
+        res.json({ ...info, limits: { maxMinutes: cfg.MAX_VIDEO_MINUTES, maxRangeMinutes: cfg.MAX_RANGE_MINUTES } });
     } catch (e) {
         handleError(res, e);
     }
 };
 
-async function createJobFrom(req, { url, options, voiceoverFileName }) {
+async function createJobFrom(req, { url, options, rangeInput }) {
     const info = await getVideoInfo(req.userId, url);
     // Authorization check removed: kisi bhi YouTuber ki video se Shorts ban sakti hai
-    if (info.durationSec > cfg.MAX_VIDEO_MINUTES * 60) {
-        const e = new Error(`Video bahut lambi hai. Max ${cfg.MAX_VIDEO_MINUTES} minute allowed hai.`);
-        e.status = 400;
-        throw e;
-    }
+    // Lambi video (>60 min) me timestamp range zaroori; chhoti me optional
+    const range = resolveRange(rangeInput, info.durationSec);
+    options = { ...options, rangeStartSec: range ? range.start : null, rangeEndSec: range ? range.end : null };
     const active = await ShortJob.findOne({ userId: req.userId, status: { $in: ACTIVE } });
     if (active) {
         const e = new Error("Aapka ek job pehle se chal raha hai. Use khatam hone do.");
@@ -123,7 +123,7 @@ exports.createJob = async (req, res) => {
             maxSec,
         };
 
-        const job = await createJobFrom(req, { url, options });
+        const job = await createJobFrom(req, { url, options, rangeInput: req.body });
 
         // Custom voiceover file save karo (agar di ho)
         if (req.file) {
@@ -169,9 +169,12 @@ exports.createJobFromUpload = async (req, res) => {
         fs.renameSync(videoFile.path, destVideo);
 
         const meta = await probe(destVideo);
-        if (meta.duration > cfg.MAX_VIDEO_MINUTES * 60) {
+        let range;
+        try {
+            range = resolveRange(req.body, meta.duration); // >60 min video me range zaroori
+        } catch (err) {
             fs.rmSync(dir, { recursive: true, force: true });
-            return res.status(400).json({ message: `Video bahut lambi hai. Max ${cfg.MAX_VIDEO_MINUTES} minute allowed hai.` });
+            throw err;
         }
 
         const originalAudio = toBool(req.body.originalAudio, true);
@@ -188,6 +191,8 @@ exports.createJobFromUpload = async (req, res) => {
             voiceoverVolume: toNum(req.body.voiceoverVolume, 100, 0, 200),
             minSec,
             maxSec,
+            rangeStartSec: range ? range.start : null,
+            rangeEndSec: range ? range.end : null,
         };
 
         const job = await ShortJob.create({
@@ -248,7 +253,11 @@ exports.regenerate = async (req, res) => {
                 options: old.options,
             });
         } else {
-            job = await createJobFrom(req, { url: old.sourceUrl, options: old.options });
+            job = await createJobFrom(req, {
+                url: old.sourceUrl,
+                options: old.options,
+                rangeInput: old.options ? { rangeStart: old.options.rangeStartSec, rangeEnd: old.options.rangeEndSec } : null,
+            });
         }
 
         // purana voiceover (agar tha) copy karo

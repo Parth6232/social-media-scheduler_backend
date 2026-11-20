@@ -154,7 +154,7 @@ function audioGraph({ options, meta, hasMusic, hasVoice, duration }) {
     return { graph: parts.join(";"), label: "aout" };
 }
 
-async function renderClip({ sourceVideo, meta, clip, outDir, index, options, credit, transcript, musicFile, voiceFile, face }) {
+async function renderClip({ sourceVideo, meta, clip, outDir, index, options, credit, transcript, musicFile, voiceFile, face, timeOffset = 0 }) {
     const duration = clip.end - clip.start;
     const base = `clip_${index}`;
     const outName = `${base}.mp4`;
@@ -169,7 +169,7 @@ async function renderClip({ sourceVideo, meta, clip, outDir, index, options, cre
 
     const graph = [v.graph, `[vcomp]ass=${base}.ass[vout]`, a.graph].filter(Boolean).join(";");
 
-    const args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", clip.start.toFixed(2), "-t", duration.toFixed(2), "-i", sourceVideo];
+    const args = ["-y", "-hide_banner", "-loglevel", "error", "-ss", (clip.start + timeOffset).toFixed(2), "-t", duration.toFixed(2), "-i", sourceVideo]; // timeOffset: range wali poori file me seek
     if (musicFile) args.push("-stream_loop", "-1", "-i", musicFile);
     if (voiceFile) args.push("-i", voiceFile);
     args.push("-filter_complex", graph, "-map", "[vout]");

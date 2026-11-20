@@ -1,42 +1,56 @@
-const { spawn, execFile } = require("child_process");
+// Shell command runner — yt-dlp / ffmpeg ke liye helper
+const { spawn } = require("child_process");
 
-// Koi bhi command (ffmpeg, yt-dlp, python) chalata hai. Shell use NAHI hota,
-// isliye user ka diya text kabhi command me inject nahi ho sakta.
-function run(cmd, args, { cwd, onLine } = {}) {
+/**
+ * Run a command, stream stdout/stderr line-by-line.
+ * @param {string} bin  - executable path
+ * @param {string[]} args
+ * @param {{ onLine?: (line: string) => void }} [opts]
+ * @returns {Promise<void>}
+ */
+function run(bin, args = [], opts = {}) {
     return new Promise((resolve, reject) => {
-        let child;
-        try {
-            child = spawn(cmd, args, { cwd, windowsHide: true });
-        } catch (e) {
-            return reject(e);
-        }
-        let tail = "";
-        const feed = (chunk) => {
-            const text = chunk.toString();
-            tail = (tail + text).slice(-4000);
-            if (onLine) text.split(/\r?\n|\r/).forEach((l) => l.trim() && onLine(l.trim()));
+        const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+        const onLine = opts.onLine || (() => {});
+
+        let buf = "";
+        const handleChunk = (chunk) => {
+            buf += chunk.toString();
+            const lines = buf.split(/\r?\n/);
+            buf = lines.pop(); // incomplete last line
+            for (const line of lines) {
+                if (line.trim()) onLine(line);
+            }
         };
-        child.stdout.on("data", feed);
-        child.stderr.on("data", feed);
-        child.on("error", (err) => {
-            if (err.code === "ENOENT") reject(new Error(`"${cmd}" install nahi hai ya PATH me nahi mila`));
-            else reject(err);
+
+        proc.stdout.on("data", handleChunk);
+        proc.stderr.on("data", handleChunk);
+
+        proc.on("error", (err) => reject(new Error(`Failed to start "${bin}": ${err.message}`)));
+        proc.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`"${bin}" exited with code ${code}`));
         });
-        child.on("close", (code) =>
-            code === 0 ? resolve(tail) : reject(new Error(`${cmd} fail hua (code ${code}): ${tail.slice(-800)}`))
-        );
     });
 }
 
-// stdout wapas chahiye (jaise ffprobe JSON)
-function capture(cmd, args) {
+/**
+ * Run a command and return its combined stdout as a string.
+ * @param {string} bin
+ * @param {string[]} args
+ * @returns {Promise<string>}
+ */
+function capture(bin, args = []) {
     return new Promise((resolve, reject) => {
-        execFile(cmd, args, { maxBuffer: 20 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-            if (err) {
-                if (err.code === "ENOENT") return reject(new Error(`"${cmd}" install nahi hai ya PATH me nahi mila`));
-                return reject(new Error(`${cmd} fail hua: ${(stderr || err.message).slice(-500)}`));
-            }
-            resolve(stdout);
+        const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        let err = "";
+        proc.stdout.on("data", (d) => { out += d.toString(); });
+        proc.stderr.on("data", (d) => { err += d.toString(); });
+        proc.on("error", (e) => reject(new Error(`Failed to start "${bin}": ${e.message}`)));
+        proc.on("close", (code) => {
+            if (code === 0) resolve(out);
+            else reject(new Error(`"${bin}" exited with code ${code}. stderr: ${err.slice(0, 500)}`));
         });
     });
 }

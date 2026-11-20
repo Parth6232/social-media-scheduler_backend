@@ -5,6 +5,11 @@ const path = require("path");
 const cfg = require("../../config/shortsConfig");
 const { run, capture } = require("./runCommand");
 
+const hms = (sec) => {
+    sec = Math.round(sec);
+    return `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}`;
+};
+
 async function probe(file) {
     const out = await capture(cfg.FFPROBE, [
         "-v", "error", "-print_format", "json", "-show_format", "-show_streams", file,
@@ -47,16 +52,27 @@ function getCookiesArgs() {
     return [];
 }
 
-async function prepareSource(videoId, onProgress = () => { }) {
-    const dir = path.join(cfg.CACHE_DIR, videoId);
+// range = { start, end } (seconds, original video ke hisaab se) ya null.
+// Return me:
+//   workDir      : audio.wav / transcript / small mp3 yahan banta hai (range ke hisaab se alag)
+//   workDuration : jitni lambai par AI kaam karega (range ho to range ki lambai)
+//   renderOffset : picker ke time + renderOffset = source FILE ka time (ffmpeg seek ke liye)
+//   absOffset    : picker ke time + absOffset    = ORIGINAL video ka time (user ko dikhane ke liye)
+async function prepareSource(videoId, onProgress = () => { }, range = null) {
+    const isUpload = String(videoId).startsWith("up_");
+    const tag = range ? `r${range.start}_${range.end}` : null;
+    // Link + range: sirf wahi hissa download hota hai => alag cache folder. Upload: poori file ek hi folder me.
+    const dir = path.join(cfg.CACHE_DIR, !isUpload && tag ? `${videoId}_${tag}` : videoId);
     fs.mkdirSync(dir, { recursive: true });
 
     let videoPath = findSource(dir);
-    if (!videoPath && String(videoId).startsWith("up_")) {
+    if (!videoPath && isUpload) {
         throw new Error("Uploaded video server se hat chuki hai (cache expire / server restart). Kripya video dobara upload karo.");
     }
     if (!videoPath) {
         const cookiesArgs = getCookiesArgs();
+        // Range ho to sirf utna hissa download (lambi video poori download nahi hoti => tez + disk bachti hai)
+        const sectionArgs = range ? ["--download-sections", `*${hms(range.start)}-${hms(range.end)}`] : [];
         const runYtdlp = (playerClients) =>
             run(
                 cfg.YTDLP,
@@ -70,6 +86,7 @@ async function prepareSource(videoId, onProgress = () => { }) {
                     "--extractor-args", `youtube:player_client=${playerClients}`,
                     ...cookiesArgs,
                     ...getProxyArgs(),
+                    ...sectionArgs,
                     "-P", dir,
                     "-o", "source.%(ext)s",
                     `https://www.youtube.com/watch?v=${videoId}`,
@@ -105,15 +122,40 @@ async function prepareSource(videoId, onProgress = () => { }) {
         }
     }
 
-    const audioPath = path.join(dir, "audio.wav");
-    if (!fs.existsSync(audioPath)) {
-        await run(cfg.FFMPEG, ["-y", "-hide_banner", "-loglevel", "error", "-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", audioPath]);
+    const meta = await probe(videoPath);
+
+    // File poori video hai ya sirf wahi hissa? (upload hamesha poori; link+range me download-sections ne kaata hota hai)
+    let renderOffset = 0;
+    let absOffset = 0;
+    let workDuration = meta.duration;
+    let windowed = false; // audio ko file me se kaatna padega?
+    if (range) {
+        const len = range.end - range.start;
+        absOffset = range.start;
+        if (isUpload || meta.duration > len + 30) {
+            // poori file hai (ya yt-dlp ne section nahi kaata) => file me range.start par seek karenge
+            windowed = true;
+            renderOffset = range.start;
+            workDuration = Math.max(1, Math.min(range.end, meta.duration) - range.start);
+        } else {
+            workDuration = meta.duration; // file khud wo hissa hai
+        }
     }
 
-    const meta = await probe(videoPath);
+    const workDir = windowed ? path.join(dir, tag) : dir;
+    fs.mkdirSync(workDir, { recursive: true });
+
+    const audioPath = path.join(workDir, "audio.wav");
+    if (!fs.existsSync(audioPath)) {
+        const args = ["-y", "-hide_banner", "-loglevel", "error"];
+        if (windowed) args.push("-ss", String(range.start), "-t", String(workDuration));
+        args.push("-i", videoPath, "-vn", "-ac", "1", "-ar", "16000", audioPath);
+        await run(cfg.FFMPEG, args);
+    }
+
     const now = new Date();
     fs.utimesSync(dir, now, now); // cache cleanup ko "recently used" dikhe
-    return { dir, videoPath, audioPath, meta };
+    return { dir, workDir, videoPath, audioPath, meta, workDuration, renderOffset, absOffset };
 }
 
 module.exports = { prepareSource, probe };

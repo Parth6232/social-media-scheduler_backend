@@ -50,6 +50,7 @@ module.exports = {
     HARD_MAX_SEC: 90, // Reel limit (config/postRules.js se match)
 
     MAX_VIDEO_MINUTES: Number(process.env.SHORTS_MAX_VIDEO_MINUTES || 60),
+    MAX_RANGE_MINUTES: Number(process.env.SHORTS_MAX_RANGE_MINUTES || 30), // lambi video me timestamp range ki max lambai
     CACHE_HOURS: Number(process.env.SHORTS_CACHE_HOURS || 24),
     KEEP_JOB_DAYS: Number(process.env.SHORTS_KEEP_JOB_DAYS || 7),
 

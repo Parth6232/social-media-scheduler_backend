@@ -1,2 +1,0 @@
-faster-whisper
-opencv-python-headless<5

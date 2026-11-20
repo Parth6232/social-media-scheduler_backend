@@ -73,24 +73,27 @@ async function runJob(jobId) {
     const report = reporter(jobId);
     await ShortJob.updateOne({ _id: jobId }, { $set: { error: null, clips: [] } });
 
+    // Timestamp range (lambi video ya user ne hissa chuna ho)
+    const range = opts.rangeStartSec != null && opts.rangeEndSec != null ? { start: opts.rangeStartSec, end: opts.rangeEndSec } : null;
+
     // 1) Download
-    await report("downloading", 3, "Video download ho rahi hai");
-    const src = await prepareSource(job.videoId, (p) => report("downloading", 3 + p * 30, "Video download ho rahi hai"));
+    await report("downloading", 3, range ? "Chuna hua hissa download ho raha hai" : "Video download ho rahi hai");
+    const src = await prepareSource(job.videoId, (p) => report("downloading", 3 + p * 30, range ? "Chuna hua hissa download ho raha hai" : "Video download ho rahi hai"), range);
 
     let transcript;
     let moments;
     const prev = await ShortJob.find({ userId: job.userId, videoId: job.videoId, status: "done", _id: { $ne: job._id } }).select("clips");
-    const history = prev.flatMap((j) => j.clips.map((c) => ({ start: c.start, end: c.end })));
+    const history = prev.flatMap((j) => j.clips.map((c) => ({ start: c.start - src.absOffset, end: c.end - src.absOffset })));
 
     if (FAST) {
         // 2+3) Whisper ke bina: Gemini audio sunkar best 30-40s moments chunta hai (fallback: energy)
         await report("analyzing", 40, "AI best moments dhoondh raha hai");
         transcript = { segments: [] }; // captions fast mode me off
         const r = await pickMomentsFast({
-            dir: src.dir,
+            dir: src.workDir,
             videoPath: src.videoPath,
             audioPath: src.audioPath,
-            duration: src.meta.duration,
+            duration: src.workDuration,
             videoTitle: job.videoTitle,
             history,
         });
@@ -100,13 +103,13 @@ async function runJob(jobId) {
     } else {
         // 2) Transcript (Whisper)
         await report("transcribing", 34, "Transcript ban raha hai (Whisper)");
-        transcript = await getTranscript(src.dir, src.audioPath, (p) => report("transcribing", 34 + p * 20, "Transcript ban raha hai (Whisper)"));
+        transcript = await getTranscript(src.workDir, src.audioPath, (p) => report("transcribing", 34 + p * 20, "Transcript ban raha hai (Whisper)"));
 
         // 3) Best moments (Gemini)
         await report("analyzing", 56, "AI best moments dhoondh raha hai");
         const picked = await pickMoments({
             transcript,
-            videoDuration: src.meta.duration,
+            videoDuration: src.workDuration,
             videoTitle: job.videoTitle,
             minSec: opts.minSec,
             maxSec: opts.maxSec,
@@ -130,7 +133,7 @@ async function runJob(jobId) {
         await report("rendering", base, `Clip ${i + 1}/${moments.length} ban rahi hai`);
 
         let face = null;
-        if (opts.facecamCrop) face = await detectFace(src.videoPath, m.start, m.end, outDir, i + 1);
+        if (opts.facecamCrop) face = await detectFace(src.videoPath, m.start + src.renderOffset, m.end + src.renderOffset, outDir, i + 1);
 
         const r = await renderClip({
             sourceVideo: src.videoPath,
@@ -144,6 +147,7 @@ async function runJob(jobId) {
             musicFile,
             voiceFile: voiceFile && fs.existsSync(voiceFile) ? voiceFile : null,
             face,
+            timeOffset: src.renderOffset,
         });
 
         await ShortJob.updateOne(
@@ -152,8 +156,9 @@ async function runJob(jobId) {
                 $push: {
                     clips: {
                         index: i + 1,
-                        start: Math.round(m.start * 10) / 10,
-                        end: Math.round(m.end * 10) / 10,
+                        // original video ke hisaab se time (range ho to offset jodkar)
+                        start: Math.round((m.start + src.absOffset) * 10) / 10,
+                        end: Math.round((m.end + src.absOffset) * 10) / 10,
                         duration: Math.round((m.end - m.start) * 10) / 10,
                         title: m.title,
                         reason: m.reason,
